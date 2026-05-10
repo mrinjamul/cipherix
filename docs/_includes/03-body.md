@@ -1,20 +1,9 @@
-# go-encryptor
-
-[![build status](https://github.com/mrinjamul/go-encryptor/workflows/test/badge.svg)](https://github.com/mrinjamul/go-encryptor/actions)
-[![release status](https://github.com/mrinjamul/go-encryptor/workflows/release/badge.svg)](https://github.com/mrinjamul/go-encryptor/actions)
-[![go version](https://img.shields.io/github/go-mod/go-version/mrinjamul/go-encryptor.svg)](https://github.com/mrinjamul/go-encryptor)
-[![GoReportCard](https://goreportcard.com/badge/github.com/mrinjamul/go-encryptor)](https://goreportcard.com/report/github.com/mrinjamul/go-encryptor)
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://github.com/mrinjamul/go-encryptor/blob/master/LICENSE)
-[![Github all releases](https://img.shields.io/github/downloads/mrinjamul/go-encryptor/total.svg)](https://GitHub.com/mrinjamul/go-encryptor/releases/)
-
-A command-line file encryption tool written in Go. Supports **AES-256-GCM**, **XChaCha20-Poly1305**, **X25519 ECDH**, and **RSA-OAEP** with a unified 64 KiB chunked AEAD format. Includes a built-in keystore for managing encryption keys, multi-recipient encryption (GPG-style), SSH key support, and shell completion.
-
 ## Features
 
 - **Password-based encryption**: AES-256-GCM (scrypt KDF) or XChaCha20-Poly1305 (Argon2id KDF)
 - **Public-key encryption**: X25519 ECDH + HKDF-SHA256 or RSA-OAEP -> AES-256-GCM
-- **Multi-recipient**: Encrypt to multiple public keys at once with wrapped content key format (GPG-style `-r`)
-- **Keystore**: Generate, import, export, and manage X25519 and RSA key pairs; auto-detects the right key on decrypt
+- **Multi-recipient**: Encrypt to multiple public keys with wrapped content key format (GPG-style `-r`)
+- **Keystore**: Store, import, export, and manage X25519 and RSA key pairs; auto-detects the right key on decrypt
 - **Keygen auto-keystore**: `keygen` automatically adds generated keys to the keystore
 - **Directory encryption**: Auto-tars before encrypting, streaming extraction on decrypt
 - **Automatic detection**: Algorithm and format auto-detected on decrypt (v1 and v2 `.lck` files)
@@ -29,17 +18,33 @@ A command-line file encryption tool written in Go. Supports **AES-256-GCM**, **X
 - **Progress bar**: Terminal progress bar auto-shows for large files (≥10 MB); `--no-progress` to suppress
 - **Built-in tar library**: `github.com/mrinjamul/go-encryptor/lib/tar`
 
+---
+
 ## Install
+
+### From source
 
 ```sh
 go install github.com/mrinjamul/go-encryptor@latest
 ```
 
-Or download a [pre-built binary](https://github.com/mrinjamul/go-encryptor/releases) for your platform.
+### Pre-built binaries
+
+Download the latest release for your platform from the [releases page](https://github.com/mrinjamul/go-encryptor/releases).
+
+### Build from source
+
+```sh
+git clone https://github.com/mrinjamul/go-encryptor.git
+cd go-encryptor
+go build
+```
+
+---
 
 ## Usage
 
-Aliases: `en` for encrypt, `de` for decrypt.  Inspect: `inspect`.
+Aliases: `en` for encrypt, `de` for decrypt.
 
 ### Password-based encryption
 
@@ -51,11 +56,12 @@ go-encryptor decrypt -p "<password>" <file.lck>
 
 The encryption method is auto-detected on decrypt (omit `-m`).
 
-Read the password from an environment variable instead:
+Read the password from an environment variable:
 
 ```sh
 export MY_SECRET="s3cret!"
 go-encryptor encrypt --password-env MY_SECRET <file>
+go-encryptor decrypt --password-env MY_SECRET <file.lck>
 ```
 
 Encrypted output gets a `.lck` extension. The original file is **deleted** after encrypt unless `-k`/`--keep` is set. Decrypt also deletes the `.lck` file by default.
@@ -78,7 +84,7 @@ Add an optional comment/label:
 go-encryptor keygen -o identity -c "my laptop key"
 ```
 
-Show the public key without writing a file:
+Show the public key only (no file written):
 
 ```sh
 go-encryptor keygen -y
@@ -118,10 +124,10 @@ Keys are stored in the platform config directory:
 | macOS | `~/Library/Application Support/go-encryptor/keystore/` |
 | Windows | `%AppData%/go-encryptor/keystore/` |
 
-Manage keys:
+#### Manage keys
 
 ```sh
-go-encryptor keystore add <name>                  # generate new key
+go-encryptor keystore add <name>                  # generate a new key
 go-encryptor keystore add <name> <identity-file>  # import existing key
 go-encryptor keystore list                         # list all keys
 go-encryptor keystore show <name>                  # show key details
@@ -132,13 +138,13 @@ go-encryptor keystore export <name> -o <file>      # export to identity file
 
 The first key added automatically becomes the default.
 
-Encrypt with a keystore key (using recipient syntax):
+#### Encrypt with a keystore key (using recipient syntax)
 
 ```sh
 go-encryptor encrypt -r <name> <file>
 ```
 
-Decrypt auto-detects the right key from the keystore -- no need to specify it:
+Decrypt auto-detects the right key from the keystore - no need to specify it:
 
 ```sh
 go-encryptor decrypt <file.lck>
@@ -157,7 +163,7 @@ Decrypt priority (first match wins):
 go-encryptor encrypt -p "<password>" <directory>
 ```
 
-The tool tars the directory and encrypts the tarball. On decrypt, the tar is extracted directly via streaming - no intermediate `.tez` file.
+The tool tars the directory and encrypts the tarball. On decrypt, the tar is extracted directly via streaming - no intermediate `.tez` file is created.
 
 Decryption extracts to the current working directory by default. Use `-o <directory>` to extract to a specific location.
 
@@ -240,23 +246,7 @@ cat secret.lck | go-encryptor decrypt -p "pass"
 
 Use `-o <file>` to write encrypted output to a file instead of stdout.
 
-### Shell completion
-
-```sh
-# bash
-source <(go-encryptor completion bash)
-
-# zsh
-source <(go-encryptor completion zsh)
-
-# fish
-go-encryptor completion fish | source
-
-# powershell
-go-encryptor completion powershell | Out-String | Invoke-Expression
-```
-
-## Options
+### Options
 
 | Flag | Description |
 |---|---|
@@ -273,12 +263,23 @@ go-encryptor completion powershell | Out-String | Invoke-Expression
 | `-y, --show-pubkey` | Show public key only (no file written) |
 | `-c, --comment` | Comment/label for new identity key |
 
-
-## Build
+### Shell completion
 
 ```sh
-go build
+# bash
+source <(go-encryptor completion bash)
+
+# zsh
+source <(go-encryptor completion zsh)
+
+# fish
+go-encryptor completion fish | source
+
+# powershell
+go-encryptor completion powershell | Out-String | Invoke-Expression
 ```
+
+---
 
 ## Library
 
@@ -287,13 +288,9 @@ The streaming tar library can be imported standalone:
 ```go
 import "github.com/mrinjamul/go-encryptor/lib/tar"
 
-tar.Create(w, paths, opts)      // stream tar to writer
-tar.Extract(dest, r, opts)      // extract tar from reader
+// Create a tar archive streaming to w
+tar.Create(w io.Writer, paths []string, opts *Options) error
+
+// Extract a tar archive from r into dest
+tar.Extract(dest string, r io.Reader, opts *Options) error
 ```
-
-## License
-
-MIT - Copyright © 2021 Injamul Mohammad Mollah
-## Troubleshooting
-
-If you encounter any errors while using go-encryptor, make sure that you have the correct key, algorithm and that the input and output files are correctly specified. If the issue persists, please file an issue on the GitHub repository for the project.

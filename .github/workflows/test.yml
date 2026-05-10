@@ -13,18 +13,21 @@ jobs:
       fail-fast: false
       matrix:
         go_version:
-          - 1.13.x
-          - 1.14.x
-          - 1.15.x
-          - 1.16.x
-    name: Test with ${{ matrix.go_version }}
+          - "1.22"
+          - "1.23"
+    name: Test with Go ${{ matrix.go_version }}
     steps:
-      - uses: actions/checkout@v2
-      - uses: actions/setup-go@v1
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
         with:
           go-version: ${{ matrix.go_version }}
       - name: Vet and test
         run: |
           go version
           go vet ./...
-          go test ./...
+          go test -race -count=1 ./...
+      - name: Upload coverage
+        if: matrix.go_version == '1.23'
+        run: |
+          go test -coverprofile=coverage.out -covermode=atomic ./...
+          go tool cover -func=coverage.out

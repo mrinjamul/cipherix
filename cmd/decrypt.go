@@ -22,14 +22,18 @@ THE SOFTWARE.
 package cmd
 
 import (
+	"bytes"
 	"encoding/binary"
 	"fmt"
+	"io"
 	"os"
-	"strings"
+	"path/filepath"
+	"runtime"
+	"sync"
 
 	"github.com/mrinjamul/go-encryptor/crypt"
+	"github.com/mrinjamul/go-encryptor/lib/tar"
 	"github.com/mrinjamul/go-encryptor/utils"
-	twarper "github.com/mrinjamul/go-tar/tarwarper"
 	"github.com/spf13/cobra"
 )
 
@@ -44,70 +48,141 @@ var decryptCmd = &cobra.Command{
 
 func decryptRun(cmd *cobra.Command, args []string) {
 	if len(args) == 0 {
-		fmt.Println("Error: Too short argument")
-		fmt.Println("Usage: " + utils.AppName + " encrypt [filename]")
-		os.Exit(0)
+		fi, err := os.Stdin.Stat()
+		if err == nil && (fi.Mode()&os.ModeCharDevice) == 0 {
+			data, err := io.ReadAll(os.Stdin)
+			if err != nil {
+				utils.ErrorLogger(err)
+				os.Exit(1)
+			}
+			decryptStdin(data)
+			return
+		}
+		fmt.Fprintln(os.Stderr, "Error: missing file argument")
+		fmt.Println("Usage: " + utils.AppName + " decrypt [filename]")
+		os.Exit(1)
 	}
 
-	if len(args) > 1 {
-		fmt.Println("Error: Too many argument")
-		fmt.Println("Usage: " + utils.AppName + " encrypt [filename]")
-		os.Exit(0)
+	// Expand glob patterns.
+	var files []string
+	for _, arg := range args {
+		matches, err := filepath.Glob(arg)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: invalid file pattern %q\n", arg)
+			os.Exit(1)
+		}
+		if len(matches) == 0 {
+			fmt.Fprintf(os.Stderr, "Error: %q: no matching files\n", arg)
+			os.Exit(1)
+		}
+		files = append(files, matches...)
 	}
 
-	encryptedfileName := args[0]
+	// Parallel per-file processing (skip for interactive or single-file).
+	needsPrompt := passwordOpt == "" && passwordEnv == "" && identityOpt == ""
+	parallelMode = outputOpt == "" && !stdoutOpt && !needsPrompt && len(files) > 1
+	if outputOpt != "" || stdoutOpt || needsPrompt || len(files) <= 1 {
+		for _, file := range files {
+			decryptFile(file)
+		}
+		return
+	}
 
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, runtime.NumCPU())
+	for _, file := range files {
+		sem <- struct{}{}
+		wg.Add(1)
+		go func(f string) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			decryptFile(f)
+		}(file)
+	}
+	wg.Wait()
+}
+
+func decryptFile(encryptedfileName string) {
 	// check if file exists
 	if _, err := os.Stat(encryptedfileName); os.IsNotExist(err) {
-		fmt.Println("Error: No such file or directory")
+		fmt.Fprintf(os.Stderr, "Error: %s: file not found\n", encryptedfileName)
 		os.Exit(1)
 	}
 
 	filename, _ := utils.GetFileNameExt(encryptedfileName)
 
-	var password []byte
-
-	if passwordOpt == "" {
-		p, err := utils.PromptTermPass("Password: ")
-		password = p
-		if err != nil {
-			utils.ErrorLogger(err)
-			os.Exit(1)
-		}
-	} else {
-		password = []byte(passwordOpt)
-	}
-
 	// read encrypted data
-	encryptedData, err := utils.ReadFile(encryptedfileName)
+	f, err := os.Open(encryptedfileName)
 	if err != nil {
 		utils.ErrorLogger(err)
 		os.Exit(1)
 	}
+	fi, err := f.Stat()
+	if err != nil {
+		f.Close()
+		utils.ErrorLogger(err)
+		os.Exit(1)
+	}
+	pr := utils.NewProgressReader(f, fi.Size(), "Reading", parallelMode || noProgress)
+	encryptedData, err := io.ReadAll(pr)
+	f.Close()
+	if err != nil {
+		utils.ErrorLogger(err)
+		os.Exit(1)
+	}
+	pr.Done()
 
-	// verifyOpt, _ := utils.AESVerifyKey(password, encryptedData)
-	// if verifyOpt != true {
-	// 	fmt.Println("Error: Wrong Password")
-	// 	os.Exit(0)
-	// }
-
-	var data []byte
-	// check if encryption method
-	if methodOpt == "aes" {
-		data, err = crypt.AESDecrypt(password, encryptedData)
+	if utils.IsArmored(encryptedData) {
+		encryptedData, err = utils.ArmorDecode(encryptedData)
 		if err != nil {
-			fmt.Println("Error: Wrong Password")
-			os.Exit(0)
-		}
-	} else if methodOpt == "xchacha20" || methodOpt == "chacha20" {
-		data, err = crypt.ChaCha20Decrypt(password, encryptedData)
-		if err != nil {
-			fmt.Println("Error: Wrong Password")
-			os.Exit(0)
+			utils.ErrorLogger(err)
+			os.Exit(1)
 		}
 	}
 
-	encryptedExt, data := data[len(data)-3:], data[:len(data)-3]
+	var data []byte
+	var ext string
+
+	if identityOpt != "" {
+		idRaw, err := utils.ReadFile(identityOpt)
+		if err != nil {
+			utils.ErrorLogger(err)
+			os.Exit(1)
+		}
+		var id crypt.PrivateKey
+		id, err = crypt.UnmarshalIdentity(idRaw)
+		if err != nil {
+			id, err = crypt.ParseSSHIdentity(idRaw)
+			if err != nil {
+				utils.ErrorLogger(fmt.Errorf("failed to parse identity: %w", err))
+				os.Exit(1)
+			}
+		}
+		data, ext, err = crypt.DecryptWithIdentity(id, encryptedData)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "Error: decryption failed — wrong identity or corrupted data")
+			os.Exit(1)
+		}
+	} else if passwordEnv != "" || passwordOpt != "" {
+		password := resolvePassword()
+		defer utils.ZeroBytes(password)
+		data, ext, err = crypt.Decrypt(password, encryptedData)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "Error: decryption failed — wrong password")
+			os.Exit(1)
+		}
+	} else {
+		data, ext, err = tryKeystoreKeys(encryptedData)
+		if err != nil {
+			password := resolvePassword()
+			defer utils.ZeroBytes(password)
+			data, ext, err = crypt.Decrypt(password, encryptedData)
+			if err != nil {
+				fmt.Fprintln(os.Stderr, "Error: decryption failed — wrong password")
+				os.Exit(1)
+			}
+		}
+	}
 
 	// print to stdout and return
 	if stdoutOpt {
@@ -115,64 +190,175 @@ func decryptRun(cmd *cobra.Command, args []string) {
 		return
 	}
 
-	if strings.Contains(string(encryptedExt), "2") {
-		encryptedExt = encryptedExt[:2]
-	}
-
-	if string(encryptedExt) != "ger" {
-		utils.SaveFile(filename+"."+string(encryptedExt), data)
-	} else {
-		utils.SaveFile(filename, data)
-	}
-	if string(encryptedExt) == "tez" {
-		path, err := os.Getwd()
-		if err != nil {
-			utils.ErrorLogger(err)
+	outPath := outputOpt
+	if outPath == "" {
+		if ext != "" && ext != "ger" {
+			outPath = filename + "." + ext
+		} else {
+			outPath = filename
 		}
-		err = twarper.ExtarctTar(path, filename+".tez")
-		_ = os.Remove(filename + ".tez")
-		if err != nil {
+	}
+	if ext == "tez" {
+		extractDir := outputOpt
+		if extractDir == "" {
+			extractDir, err = os.Getwd()
+			if err != nil {
+				utils.ErrorLogger(err)
+				os.Exit(1)
+			}
+		}
+		if err := tar.Extract(extractDir, bytes.NewReader(data), nil); err != nil {
 			utils.ErrorLogger(err)
 			os.Exit(1)
 		}
+	} else {
+		utils.SaveFile(outPath, data)
 	}
+	outputMu.Lock()
 	fmt.Println(filename + " decrypted successfully.")
+	outputMu.Unlock()
 
 	if !keepdeOpt {
-		err := os.Remove(args[0])
+		err := utils.SecureDelete(encryptedfileName)
 		if err != nil {
 			utils.ErrorLogger(err)
 		}
 	}
 }
 
+func decryptStdin(encryptedData []byte) {
+	var data []byte
+	var err error
+
+	if utils.IsArmored(encryptedData) {
+		encryptedData, err = utils.ArmorDecode(encryptedData)
+		if err != nil {
+			utils.ErrorLogger(err)
+			os.Exit(1)
+		}
+	}
+
+	if identityOpt != "" {
+		idRaw, err := utils.ReadFile(identityOpt)
+		if err != nil {
+			utils.ErrorLogger(err)
+			os.Exit(1)
+		}
+		var id crypt.PrivateKey
+		id, err = crypt.UnmarshalIdentity(idRaw)
+		if err != nil {
+			id, err = crypt.ParseSSHIdentity(idRaw)
+			if err != nil {
+				utils.ErrorLogger(fmt.Errorf("failed to parse identity: %w", err))
+				os.Exit(1)
+			}
+		}
+		data, _, err = crypt.DecryptWithIdentity(id, encryptedData)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "Error: decryption failed — wrong identity or corrupted data")
+			os.Exit(1)
+		}
+	} else if passwordEnv != "" || passwordOpt != "" {
+		password := resolvePassword()
+		data, _, err = crypt.Decrypt(password, encryptedData)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "Error: decryption failed — wrong password")
+			os.Exit(1)
+		}
+	} else {
+		data, _, err = tryKeystoreKeys(encryptedData)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "Error: password required when reading from stdin (use -p, --password-env, or -i)")
+			os.Exit(1)
+		}
+	}
+
+	if outputOpt != "" {
+		utils.SaveFile(outputOpt, data)
+	} else {
+		os.Stdout.Write(data)
+	}
+}
+
+// tryKeystoreKeys iterates all keys in the keystore and tries to decrypt.
+// The default key is tried first; remaining keys are tried in list order.
+func tryKeystoreKeys(encryptedData []byte) ([]byte, string, error) {
+	keys, err := listKeys()
+	if err != nil || len(keys) == 0 {
+		return nil, "", fmt.Errorf("no keystore keys available")
+	}
+
+	dflt, _ := defaultKeyName()
+
+	if dflt != "" {
+		id, loadErr := loadKey(dflt)
+		if loadErr == nil {
+			data, ext, decryptErr := crypt.DecryptWithIdentity(id, encryptedData)
+			if decryptErr == nil {
+				outputMu.Lock()
+				fmt.Printf("Using default key %q from keystore\n", dflt)
+				outputMu.Unlock()
+				return data, ext, nil
+			}
+		}
+	}
+
+	for _, name := range keys {
+		if name == dflt {
+			continue
+		}
+		id, loadErr := loadKey(name)
+		if loadErr != nil {
+			continue
+		}
+		data, ext, decryptErr := crypt.DecryptWithIdentity(id, encryptedData)
+		if decryptErr == nil {
+			outputMu.Lock()
+			fmt.Printf("Using key %q from keystore\n", name)
+			outputMu.Unlock()
+			return data, ext, nil
+		}
+	}
+
+	return nil, "", fmt.Errorf("no keystore key could decrypt the file")
+}
+
+// resolvePassword returns the password from --password-env, -p, or interactive prompt.
+func resolvePassword() []byte {
+	if passwordEnv != "" {
+		p := os.Getenv(passwordEnv)
+		if p == "" {
+			fmt.Fprintf(os.Stderr, "Error: environment variable %s is not set or is empty\n", passwordEnv)
+			os.Exit(1)
+		}
+		return []byte(p)
+	}
+	if passwordOpt != "" {
+		return []byte(passwordOpt)
+	}
+	p, err := utils.PromptTermPass("Password: ")
+	if err != nil {
+		utils.ErrorLogger(err)
+		os.Exit(1)
+	}
+	return p
+}
+
 var (
-	keepdeOpt bool
-	stdoutOpt bool
+	keepdeOpt   bool
+	stdoutOpt   bool
+	identityOpt string
 )
 
 func init() {
 	rootCmd.AddCommand(decryptCmd)
 
-	// Here you will define your flags and configuration settings.
-
-	// Cobra supports Persistent Flags which will work for this command
-	// and all subcommands, e.g.:
-	// decryptCmd.PersistentFlags().String("foo", "", "A help for foo")
-
-	// Cobra supports local flags which will only run when this command
-	// is called directly, e.g.:
-	// decryptCmd.Flags().BoolP("toggle", "t", false, "Help message for toggle")
 	decryptCmd.Flags().BoolVarP(&keepdeOpt, "keep", "k", false, "Keep encrypted file")
-	decryptCmd.Flags().BoolVar(&stdoutOpt, "print", false, "Print the encrypted file")
-	decryptCmd.Flags().StringVarP(&methodOpt, "method", "m", "aes", "Encryption method (aes, chacha20, none)")
-	decryptCmd.Flags().StringVarP(&passwordOpt, "password", "p", "", "Get password")
-
-	// pre-execution
-	methodOpt = strings.ToLower(methodOpt)
-	if methodOpt != "aes" && methodOpt != "chacha20" && methodOpt != "xchacha20" {
-		fmt.Println("Error: Invalid Encryption method")
-		os.Exit(1)
-	}
-
+	decryptCmd.Flags().BoolVar(&stdoutOpt, "print", false, "Print decrypted data to stdout")
+	decryptCmd.Flags().StringVarP(&methodOpt, "method", "m", "aes", "Encryption method (auto-detected if omitted)")
+	decryptCmd.Flags().StringVarP(&passwordOpt, "password", "p", "", "Password")
+	decryptCmd.Flags().StringVarP(&passwordEnv, "password-env", "", "", "Read password from environment variable")
+	decryptCmd.Flags().StringVarP(&identityOpt, "identity", "i", "", "Identity file for decryption")
+	decryptCmd.Flags().StringVarP(&outputOpt, "output", "o", "", "Output file path")
+	decryptCmd.Flags().BoolVar(&noProgress, "no-progress", false, "Disable progress bar")
 }

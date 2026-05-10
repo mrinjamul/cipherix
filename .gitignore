@@ -19,6 +19,7 @@ test-data/
 *.mp4
 *.pdf
 *.md
+!docs/**/*.md
 
 
 # Output of the go coverage tool, specifically when used with LiteIDE
