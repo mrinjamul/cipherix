@@ -1,1 +1,1 @@
-[View Repository](https://github.com/mrinjamul/go-encryptor/)
+[View Repository](https://github.com/mrinjamul/cipherix/)

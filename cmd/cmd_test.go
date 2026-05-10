@@ -13,23 +13,23 @@ import (
 
 var binaryPath string
 
-// lckPath returns the expected .lck path for a source file.
-// The encrypt command strips the original extension and appends .lck.
+// lckPath returns the expected .chx path for a source file.
+// The encrypt command strips the original extension and appends .chx.
 func lckPath(src string) string {
 	ext := filepath.Ext(src)
 	if ext == "" {
-		return src + ".lck"
+		return src + ".chx"
 	}
-	return src[:len(src)-len(ext)] + ".lck"
+	return src[:len(src)-len(ext)] + ".chx"
 }
 
 func TestMain(m *testing.M) {
-	dir, err := os.MkdirTemp("", "go-encryptor-test-*")
+	dir, err := os.MkdirTemp("", "cipherix-test-*")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "failed to create temp dir: %v\n", err)
 		os.Exit(1)
 	}
-	binaryPath = filepath.Join(dir, "go-encryptor")
+	binaryPath = filepath.Join(dir, "cipherix")
 	cmd := exec.Command("go", "build", "-o", binaryPath, ".")
 	cmd.Dir = filepath.Join("..")
 	if out, err := cmd.CombinedOutput(); err != nil {
@@ -151,7 +151,7 @@ func TestEncryptDecryptChaCha20(t *testing.T) {
 func TestEncryptOutputFlag(t *testing.T) {
 	dir := t.TempDir()
 	src := filepath.Join(dir, "input.txt")
-	dst := filepath.Join(dir, "custom.lck")
+	dst := filepath.Join(dir, "custom.chx")
 	if err := os.WriteFile(src, []byte("custom output"), 0644); err != nil {
 		t.Fatal(err)
 	}
@@ -240,7 +240,7 @@ func TestKeygenOutput(t *testing.T) {
 	if _, err := os.Stat(idPath); os.IsNotExist(err) {
 		t.Fatal("identity file not created")
 	}
-	if !strings.Contains(out, "Public key: goenc") {
+	if !strings.Contains(out, "Public key: cphx") {
 		t.Fatalf("expected public key in output, got: %s", out)
 	}
 }
@@ -251,8 +251,8 @@ func TestKeygenShowPubkey(t *testing.T) {
 		t.Fatalf("keygen -y failed: %v\n%s", err, out)
 	}
 	out = strings.TrimSpace(out)
-	if !strings.HasPrefix(out, "goenc") {
-		t.Fatalf("expected goenc prefix, got: %s", out)
+	if !strings.HasPrefix(out, "cphx") {
+		t.Fatalf("expected cphx prefix, got: %s", out)
 	}
 }
 
@@ -318,10 +318,10 @@ func TestGlobEncrypt(t *testing.T) {
 	run("encrypt", "-k", "-p", "pass", filepath.Join(dir, "*.txt"))
 
 	if _, err := os.Stat(lckPath(filepath.Join(dir, "a.txt"))); os.IsNotExist(err) {
-		t.Fatal("a.lck not created")
+		t.Fatal("a.chx not created")
 	}
 	if _, err := os.Stat(lckPath(filepath.Join(dir, "b.txt"))); os.IsNotExist(err) {
-		t.Fatal("b.lck not created")
+		t.Fatal("b.chx not created")
 	}
 }
 
@@ -372,8 +372,9 @@ func TestVersion(t *testing.T) {
 	if err != nil {
 		t.Fatalf("version failed: %v", err)
 	}
-	if !strings.Contains(out, "2.1.0") {
-		t.Fatalf("expected version 2.1.0, got: %s", out)
+	// Default fallback when built without -ldflags; releases inject the real version.
+	if !strings.Contains(out, "dev") {
+		t.Fatalf("expected version dev, got: %s", out)
 	}
 }
 
@@ -429,7 +430,7 @@ func TestEmptyFileEncryptDecrypt(t *testing.T) {
 	origHash := fileHash(t, src)
 
 	run("encrypt", "-k", "-p", "pass", src)
-	run("decrypt", "-k", "-p", "pass", src+".lck")
+	run("decrypt", "-k", "-p", "pass", src+".chx")
 
 	if fileHash(t, src) != origHash {
 		t.Fatalf("integrity check failed for empty file round-trip")
@@ -480,9 +481,9 @@ func TestDirectoryEncryptDecryptRoundtrip(t *testing.T) {
 		t.Fatalf("expected success, got: %s", out)
 	}
 
-	lck := dir + ".lck"
+	lck := dir + ".chx"
 	if _, err := os.Stat(lck); os.IsNotExist(err) {
-		t.Fatal("encrypted directory .lck not created")
+		t.Fatal("encrypted directory .chx not created")
 	}
 
 	// Decrypt to a temp dir by changing the subprocess CWD.
@@ -601,7 +602,7 @@ func TestCorruptLckFile(t *testing.T) {
 
 	_, errOut, err := run("decrypt", "-p", "pass", lck)
 	if err == nil {
-		t.Fatal("expected error for corrupt .lck")
+		t.Fatal("expected error for corrupt .chx")
 	}
 	if !strings.Contains(errOut, "decryption failed — wrong password") {
 		t.Fatalf("expected wrong password error, got: %s", errOut)
@@ -609,7 +610,7 @@ func TestCorruptLckFile(t *testing.T) {
 }
 
 func TestDecryptMissingFile(t *testing.T) {
-	stdout, stderr, err := run("decrypt", "-p", "pass", "/nonexistent/file.lck")
+	stdout, stderr, err := run("decrypt", "-p", "pass", "/nonexistent/file.chx")
 	if err == nil {
 		t.Fatal("expected error for missing file")
 	}
@@ -677,7 +678,7 @@ func TestKeygenWithComment(t *testing.T) {
 	if !strings.Contains(string(data), "# my-test-key") {
 		t.Fatalf("expected comment in identity file, got: %s", string(data))
 	}
-	if !strings.Contains(out, "Public key: goenc") {
+	if !strings.Contains(out, "Public key: cphx") {
 		t.Fatalf("expected public key in output, got: %s", out)
 	}
 }
@@ -701,11 +702,11 @@ func TestKeygenDefaultOutput(t *testing.T) {
 	if !strings.Contains(out, "Identity written to") {
 		t.Fatalf("expected identity written message, got: %s", out)
 	}
-	if _, err := os.Stat(filepath.Join(dir, "go-encryptor-identity")); os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(dir, "cipherix-identity")); os.IsNotExist(err) {
 		t.Fatal("default identity file not created")
 	}
 	// Verify file permissions are 0600.
-	info, _ := os.Stat(filepath.Join(dir, "go-encryptor-identity"))
+	info, _ := os.Stat(filepath.Join(dir, "cipherix-identity"))
 	if info.Mode().Perm() != 0600 {
 		t.Fatalf("expected 0600 permissions, got %o", info.Mode().Perm())
 	}
@@ -841,7 +842,7 @@ func TestKeystoreAddGenerate(t *testing.T) {
 	if !strings.Contains(out, "Set \"mykey\" as the default key") {
 		t.Fatalf("expected auto-default message, got: %s", out)
 	}
-	if !strings.Contains(out, "Public key: goenc") {
+	if !strings.Contains(out, "Public key: cphx") {
 		t.Fatalf("expected public key in output, got: %s", out)
 	}
 }
@@ -899,7 +900,7 @@ func TestKeystoreShow(t *testing.T) {
 	if !strings.Contains(out, "show-key") {
 		t.Fatalf("expected key name in output, got: %s", out)
 	}
-	if !strings.Contains(out, "Public key: goenc") {
+	if !strings.Contains(out, "Public key: cphx") {
 		t.Fatalf("expected public key, got: %s", out)
 	}
 }
@@ -1269,8 +1270,8 @@ func TestKeygenShowPubkeyNoKeystore(t *testing.T) {
 	if err != nil {
 		t.Fatalf("keygen -y failed: %v\n%s", err, out)
 	}
-	if !strings.HasPrefix(strings.TrimSpace(out), "goenc") {
-		t.Fatalf("expected goenc prefix, got: %s", out)
+	if !strings.HasPrefix(strings.TrimSpace(out), "cphx") {
+		t.Fatalf("expected cphx prefix, got: %s", out)
 	}
 
 	// Keystore should be empty (no key added).
@@ -1305,7 +1306,7 @@ func TestParallelGlobEncryptDecrypt(t *testing.T) {
 		t.Fatalf("parallel glob encrypt failed: %v\n%s", err, out)
 	}
 
-	// Verify all .lck files created.
+	// Verify all .chx files created.
 	for _, src := range srcs {
 		lck := lckPath(src)
 		if _, err := os.Stat(lck); os.IsNotExist(err) {
@@ -1314,7 +1315,7 @@ func TestParallelGlobEncryptDecrypt(t *testing.T) {
 	}
 
 	// Decrypt all at once with glob.
-	out, _, err = run("decrypt", "-k", "-p", "pass", filepath.Join(dir, "pg_*.lck"))
+	out, _, err = run("decrypt", "-k", "-p", "pass", filepath.Join(dir, "pg_*.chx"))
 	if err != nil {
 		t.Fatalf("parallel glob decrypt failed: %v\n%s", err, out)
 	}
@@ -1338,13 +1339,13 @@ func TestStdinEncryptDecryptPassword(t *testing.T) {
 	dir := t.TempDir()
 
 	// Encrypt from stdin, write to file
-	out, _, err := runWithStdin("stdin test data", "encrypt", "-p", "testpass", "-o", filepath.Join(dir, "out.lck"))
+	out, _, err := runWithStdin("stdin test data", "encrypt", "-p", "testpass", "-o", filepath.Join(dir, "out.chx"))
 	if err != nil {
 		t.Fatalf("stdin encrypt failed: %v\n%s", err, out)
 	}
 
 	// Decrypt from file, print to stdout
-	out, _, err = run("decrypt", "-p", "testpass", "--print", filepath.Join(dir, "out.lck"))
+	out, _, err = run("decrypt", "-p", "testpass", "--print", filepath.Join(dir, "out.chx"))
 	if err != nil {
 		t.Fatalf("stdin decrypt failed: %v\n%s", err, out)
 	}
@@ -1416,7 +1417,7 @@ func TestStdinEncryptWithRecipient(t *testing.T) {
 	}
 
 	// Encrypt stdin to recipient, output to file
-	lckPath := filepath.Join(dir, "recv.lck")
+	lckPath := filepath.Join(dir, "recv.chx")
 	runWithStdin("recipient stdin data", "encrypt", "-r", pubkey, "-o", lckPath)
 
 	// Decrypt and verify
@@ -1453,7 +1454,7 @@ func TestArmorEncryptDecryptFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.HasPrefix(string(data), "-----BEGIN GO-ENCRYPTOR FILE-----") {
+	if !strings.HasPrefix(string(data), "-----BEGIN CIPHERIX FILE-----") {
 		t.Fatalf("expected armor header, got: %s", string(data[:60]))
 	}
 
@@ -1477,7 +1478,7 @@ func TestStdinArmorPipe(t *testing.T) {
 	if err != nil {
 		t.Fatalf("armor encrypt failed: %v\n%s", err, out)
 	}
-	if !strings.HasPrefix(out, "-----BEGIN GO-ENCRYPTOR FILE-----") {
+	if !strings.HasPrefix(out, "-----BEGIN CIPHERIX FILE-----") {
 		t.Fatalf("expected armor header in stdout, got: %s", out[:60])
 	}
 
@@ -1579,7 +1580,7 @@ func TestSSHRoundtripStdin(t *testing.T) {
 	pubkey := generateSSHKey(t, dir, "key")
 
 	// Encrypt stdin to SSH pub key, output to file
-	lckPath := filepath.Join(dir, "ssh-stdin.lck")
+	lckPath := filepath.Join(dir, "ssh-stdin.chx")
 	runWithStdin("ssh stdin data", "encrypt", "-r", pubkey, "-o", lckPath)
 
 	// Decrypt file with SSH private key, print to stdout
@@ -1653,10 +1654,10 @@ func TestSSHInvalidRecipient(t *testing.T) {
 
 func TestSSHInvalidIdentity(t *testing.T) {
 	dir := t.TempDir()
-	lck := filepath.Join(dir, "test.lck")
+	lck := filepath.Join(dir, "test.chx")
 
-	// Create a minimal .lck file
-	emptyLck := filepath.Join(dir, "dummy.lck")
+	// Create a minimal .chx file
+	emptyLck := filepath.Join(dir, "dummy.chx")
 	os.WriteFile(emptyLck, []byte("fake"), 0644)
 
 	_, _, err := run("decrypt", "-i", "/nonexistent/file", emptyLck)
@@ -1675,7 +1676,7 @@ func TestSSHArmoredCombine(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SSH+armor encrypt failed: %v\n%s", err, encOut)
 	}
-	if !strings.HasPrefix(encOut, "-----BEGIN GO-ENCRYPTOR FILE-----") {
+	if !strings.HasPrefix(encOut, "-----BEGIN CIPHERIX FILE-----") {
 		t.Fatalf("expected armor in output, got: %s", encOut[:60])
 	}
 
@@ -1849,7 +1850,7 @@ func TestInspectCommandMultiRecipient(t *testing.T) {
 		t.Fatal(err)
 	}
 	pub1 := string(pub1bytes)
-	// Extract the goenc pubkey from the identity file (it's on the "# public:" line)
+	// Extract the cphx pubkey from the identity file (it's on the "# public:" line)
 	var pubkey1, pubkey2 string
 	for _, line := range strings.Split(pub1, "\n") {
 		if strings.HasPrefix(line, "# public: ") {
@@ -1893,7 +1894,7 @@ func TestInspectCommandMultiRecipient(t *testing.T) {
 
 func TestInspectCommandInvalidFile(t *testing.T) {
 	dir := t.TempDir()
-	bad := filepath.Join(dir, "fake.lck")
+	bad := filepath.Join(dir, "fake.chx")
 	if err := os.WriteFile(bad, []byte("not encrypted"), 0644); err != nil {
 		t.Fatal(err)
 	}
@@ -2110,7 +2111,7 @@ func TestRSAPipeRoundtrip(t *testing.T) {
 	lck := lckPath(src)
 	lckData, err := os.ReadFile(lck)
 	if err != nil {
-		t.Fatalf("reading .lck file: %v", err)
+		t.Fatalf("reading .chx file: %v", err)
 	}
 
 	out, _, err = runWithStdin(string(lckData), "decrypt", "-i", filepath.Join(dir, "rsa-pipe"))
@@ -2148,7 +2149,7 @@ func TestRSAInvalidIdentity(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	src := filepath.Join(dir, "some.lck")
+	src := filepath.Join(dir, "some.chx")
 	if err := os.WriteFile(src, []byte("garbage"), 0644); err != nil {
 		t.Fatal(err)
 	}
@@ -2178,9 +2179,9 @@ func TestRSAArmoredRoundtrip(t *testing.T) {
 	lck := lckPath(src)
 	lckData, err := os.ReadFile(lck)
 	if err != nil {
-		t.Fatalf("reading armored .lck: %v", err)
+		t.Fatalf("reading armored .chx: %v", err)
 	}
-	if !strings.Contains(string(lckData), "BEGIN GO-ENCRYPTOR FILE") {
+	if !strings.Contains(string(lckData), "BEGIN CIPHERIX FILE") {
 		t.Fatalf("expected armored format, got:\n%s", lckData)
 	}
 
@@ -2326,7 +2327,7 @@ func TestKeyKeystoreFlagRemoved(t *testing.T) {
 	if err := os.WriteFile(encSrc, []byte("data"), 0644); err != nil {
 		t.Fatal(err)
 	}
-	decSrc := filepath.Join(dir, "dec_test.lck")
+	decSrc := filepath.Join(dir, "dec_test.chx")
 	if err := os.WriteFile(decSrc, []byte("data"), 0644); err != nil {
 		t.Fatal(err)
 	}
@@ -2351,7 +2352,7 @@ func TestKeyKeystoreFlagRemoved(t *testing.T) {
 }
 
 // TestEncryptRecipientFromGoencFile verifies -r resolves a file path whose
-// content is a goenc public key string.
+// content is a cphx public key string.
 func TestEncryptRecipientFromGoencFile(t *testing.T) {
 	dir := t.TempDir()
 
@@ -2385,7 +2386,7 @@ func TestEncryptRecipientFromGoencFile(t *testing.T) {
 
 	out, _, err := run("encrypt", "-k", "-r", keyFile, src)
 	if err != nil {
-		t.Fatalf("encrypt with -r pointing to goenc key file failed: %v\n%s", err, out)
+		t.Fatalf("encrypt with -r pointing to cphx key file failed: %v\n%s", err, out)
 	}
 	if !strings.Contains(out, "encrypted successfully") {
 		t.Fatalf("expected success, got: %s", out)
@@ -2459,27 +2460,27 @@ func TestEncryptRecipientFromSSHFile(t *testing.T) {
 	}
 }
 
-// TestEncryptRecipientGoencPrefixSkipsKeystore verifies that a keystore key
-// whose name starts with "goenc" is not resolved via -r (the prefix check
+// TestEncryptRecipientCphxPrefixSkipsKeystore verifies that a keystore key
+// whose name starts with "cphx" is not resolved via -r (the prefix check
 // bypasses keystore lookup).
-func TestEncryptRecipientGoencPrefixSkipsKeystore(t *testing.T) {
+func TestEncryptRecipientCphxPrefixSkipsKeystore(t *testing.T) {
 	home := t.TempDir()
 	env := keystoreEnv(home)
 
-	// Add a key with a "goenc"-prefixed name.
-	runWithEnv(env, "keystore", "add", "goencTestKey")
+	// Add a key with a "cphx"-prefixed name.
+	runWithEnv(env, "keystore", "add", "cphxTestKey")
 
 	src := filepath.Join(home, "secret.txt")
 	if err := os.WriteFile(src, []byte("data"), 0644); err != nil {
 		t.Fatal(err)
 	}
 
-	// -r goencTestKey should fail because goenc prefix skips keystore,
-	// no file named "goencTestKey" exists, and "goencTestKey" is not a
+	// -r cphxTestKey should fail because cphx prefix skips keystore,
+	// no file named "cphxTestKey" exists, and "cphxTestKey" is not a
 	// valid inline key.
-	_, stderr, err := runWithEnv(env, "encrypt", "-k", "-r", "goencTestKey", src)
+	_, stderr, err := runWithEnv(env, "encrypt", "-k", "-r", "cphxTestKey", src)
 	if err == nil {
-		t.Fatal("expected error for goenc-prefixed keystore key via -r")
+		t.Fatal("expected error for cphx-prefixed keystore key via -r")
 	}
 	if !strings.Contains(stderr, "invalid recipient") {
 		t.Fatalf("expected invalid recipient error, got: %s", stderr)
@@ -2491,8 +2492,8 @@ func TestEncryptRecipientGoencPrefixSkipsKeystore(t *testing.T) {
 		// There's no "testkey" in keystore, so this would fail too.
 		// Instead, just verify the key exists in keystore.
 		listOut, _, _ := runWithEnv(env, "keystore", "list")
-		if !strings.Contains(listOut, "goencTestKey") {
-			t.Fatal("goencTestKey should be present in keystore")
+		if !strings.Contains(listOut, "cphxTestKey") {
+			t.Fatal("cphxTestKey should be present in keystore")
 		}
 	}
 	_ = encOut
@@ -2553,7 +2554,7 @@ func TestEncryptRecipientLongStringSkipsKeystore(t *testing.T) {
 func TestEncryptRecipientFallbackChainExhaustion(t *testing.T) {
 	dir := t.TempDir()
 
-	// A short name with no goenc/ssh- prefix → goes through full chain:
+	// A short name with no cphx/ssh- prefix → goes through full chain:
 	// keystore → file → inline, all fail.
 	src := filepath.Join(dir, "secret.txt")
 	if err := os.WriteFile(src, []byte("data"), 0644); err != nil {
@@ -2569,9 +2570,9 @@ func TestEncryptRecipientFallbackChainExhaustion(t *testing.T) {
 	}
 }
 
-// TestEncryptMixedKeystoreAndGoencRecipients verifies -r works with a
-// keystore name and a goenc inline key in the same command.
-func TestEncryptMixedKeystoreAndGoencRecipients(t *testing.T) {
+// TestEncryptMixedKeystoreAndCphxRecipients verifies -r works with a
+// keystore name and a cphx inline key in the same command.
+func TestEncryptMixedKeystoreAndCphxRecipients(t *testing.T) {
 	dir := t.TempDir()
 	home := t.TempDir()
 	env := keystoreEnv(home)
@@ -2706,7 +2707,7 @@ func TestStdinKeystoreRoundtrip(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Pipe .lck data through decrypt stdin with no flags (auto-detect).
+	// Pipe .chx data through decrypt stdin with no flags (auto-detect).
 	out, _, err = runWithStdinEnv(string(lckData), env, "decrypt")
 	if err != nil {
 		t.Fatalf("stdin auto-decrypt failed: %v\n%s", err, out)
@@ -2770,5 +2771,47 @@ func TestAutoDecryptWithNonDefaultKeystoreKey(t *testing.T) {
 	}
 	if fileHash(t, src) != origHash {
 		t.Fatal("integrity check failed")
+	}
+}
+
+// TestCLIDecryptOldLckFormat verifies that .lck files created with the old
+// "goenc" magic header can still be decrypted via the CLI.
+func TestCLIDecryptOldLckFormat(t *testing.T) {
+	dir := t.TempDir()
+
+	pass := "oldformatpass"
+	src := filepath.Join(dir, "old_secret.txt")
+	if err := os.WriteFile(src, []byte("old format data"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	origHash := fileHash(t, src)
+
+	out, _, err := run("encrypt", "-k", "-p", pass, src)
+	if err != nil {
+		t.Fatalf("encrypt failed: %v\n%s", err, out)
+	}
+	chx := lckPath(src)
+
+	ct, err := os.ReadFile(chx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldCT := make([]byte, len(ct)+1)
+	copy(oldCT[:5], "goenc")
+	copy(oldCT[5:], ct[4:])
+
+	lck := filepath.Join(dir, "old_secret.lck")
+	if err := os.WriteFile(lck, oldCT, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	os.Remove(chx)
+
+	out, _, err = run("decrypt", "-k", "-p", pass, lck)
+	if err != nil {
+		t.Fatalf("decrypt old .lck failed: %v\n%s", err, out)
+	}
+	if fileHash(t, src) != origHash {
+		t.Fatal("integrity check failed after old-format decrypt")
 	}
 }

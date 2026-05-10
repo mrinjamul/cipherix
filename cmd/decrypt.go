@@ -31,9 +31,9 @@ import (
 	"runtime"
 	"sync"
 
-	"github.com/mrinjamul/go-encryptor/crypt"
-	"github.com/mrinjamul/go-encryptor/lib/tar"
-	"github.com/mrinjamul/go-encryptor/utils"
+	"github.com/mrinjamul/cipherix/crypt"
+	"github.com/mrinjamul/cipherix/lib/tar"
+	"github.com/mrinjamul/cipherix/utils"
 	"github.com/spf13/cobra"
 )
 

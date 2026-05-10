@@ -350,7 +350,7 @@ func hybridEncrypt(recips []Recipient, data []byte, ext string) ([]byte, error) 
 			if err != nil {
 				return nil, err
 			}
-			h := hkdf.New(sha256.New, sharedSecret, salt, []byte("go-encryptor-multi"))
+			h := hkdf.New(sha256.New, sharedSecret, salt, []byte("cipherix-multi"))
 			wrapKey := make([]byte, 32)
 			if _, err := io.ReadFull(h, wrapKey); err != nil {
 				return nil, err
@@ -504,7 +504,7 @@ func hybridDecrypt(priv PrivateKey, data []byte) ([]byte, string, error) {
 			if err != nil {
 				continue
 			}
-			h := hkdf.New(sha256.New, sharedSecret, salt, []byte("go-encryptor-multi"))
+			h := hkdf.New(sha256.New, sharedSecret, salt, []byte("cipherix-multi"))
 			wrapKey := make([]byte, 32)
 			if _, err := io.ReadFull(h, wrapKey); err != nil {
 				continue

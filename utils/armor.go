@@ -9,8 +9,8 @@ import (
 )
 
 const (
-	armorHeader    = "-----BEGIN GO-ENCRYPTOR FILE-----"
-	armorFooter    = "-----END GO-ENCRYPTOR FILE-----"
+	armorHeader    = "-----BEGIN CIPHERIX FILE-----"
+	armorFooter    = "-----END CIPHERIX FILE-----"
 	armorLineLen   = 64
 	maxArmorSize   = 100 * 1024 * 1024 // 100 MB maximum plaintext size
 )

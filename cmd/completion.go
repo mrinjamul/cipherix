@@ -14,20 +14,20 @@ var completionCmd = &cobra.Command{
 To load completions:
 
 Bash:
-  source <(go-encryptor completion bash)
+  source <(cipherix completion bash)
   # To load permanently:
-  echo "source <(go-encryptor completion bash)" >> ~/.bashrc
+  echo "source <(cipherix completion bash)" >> ~/.bashrc
 
 Zsh:
-  source <(go-encryptor completion zsh)
+  source <(cipherix completion zsh)
   # To load permanently:
-  echo "source <(go-encryptor completion zsh)" >> ~/.zshrc
+  echo "source <(cipherix completion zsh)" >> ~/.zshrc
 
 Fish:
-  go-encryptor completion fish | source
+  cipherix completion fish | source
 
 PowerShell:
-  go-encryptor completion powershell | Out-String | Invoke-Expression
+  cipherix completion powershell | Out-String | Invoke-Expression
 `,
 	DisableFlagsInUseLine: true,
 	ValidArgs:             []string{"bash", "zsh", "fish", "powershell"},

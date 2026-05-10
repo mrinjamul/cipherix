@@ -15,7 +15,7 @@ import (
 )
 
 // AppName is the application name
-var AppName = "go-encryptor"
+var AppName = "cipherix"
 
 // ErrorLogger logs error
 func ErrorLogger(err error) {

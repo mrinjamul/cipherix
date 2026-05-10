@@ -5,13 +5,14 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/mrinjamul/go-encryptor/crypt"
-	"github.com/mrinjamul/go-encryptor/utils"
+	"github.com/mrinjamul/cipherix/crypt"
+	"github.com/mrinjamul/cipherix/utils"
 	"github.com/spf13/cobra"
 )
 
 var keygenCmd = &cobra.Command{
 	Use:   "keygen",
+	Aliases: []string{"kgen"},
 	Short: "Generate a new encryption key pair",
 	Long: `Generate a new X25519 key pair for public-key encryption.
 The identity file can be used with -i/--identity for decryption,
@@ -42,7 +43,7 @@ func keygenRun(cmd *cobra.Command, args []string) {
 
 	output := keygenOutput
 	if output == "" {
-		output = "go-encryptor-identity"
+		output = "cipherix-identity"
 	}
 
 	if err := os.WriteFile(output, data, 0600); err != nil {
@@ -70,7 +71,7 @@ func keygenRun(cmd *cobra.Command, args []string) {
 
 func init() {
 	rootCmd.AddCommand(keygenCmd)
-	keygenCmd.Flags().StringVarP(&keygenOutput, "output", "o", "", "Output path (default: go-encryptor-identity)")
+	keygenCmd.Flags().StringVarP(&keygenOutput, "output", "o", "", "Output path (default: cipherix-identity)")
 	keygenCmd.Flags().StringVarP(&keygenComment, "comment", "c", "", "Identity comment/label")
 	keygenCmd.Flags().BoolVarP(&showPubkey, "show-pubkey", "y", false, "Only show public key, do not write identity")
 }

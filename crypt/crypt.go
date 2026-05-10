@@ -24,8 +24,10 @@ import (
 
 // File format constants.
 const (
-	magic         = "goenc"
-	magicLen      = 5
+	magic         = "cphx"
+	magicLen      = 4
+	oldMagic      = "goenc"
+	oldMagicLen   = 5
 	headerVersion = 1
 
 	headerBaseLen = magicLen + 4 // magic + version + algo + kdf + extLen
@@ -105,22 +107,29 @@ func (h *fileHeader) marshal() []byte {
 }
 
 func parseHeader(data []byte) (*fileHeader, int, error) {
-	if len(data) < headerBaseLen || string(data[:magicLen]) != magic {
+	var ml int
+	switch {
+	case len(data) >= oldMagicLen && string(data[:oldMagicLen]) == oldMagic:
+		ml = oldMagicLen
+	case len(data) >= magicLen && string(data[:magicLen]) == magic:
+		ml = magicLen
+	default:
 		return nil, 0, ErrUnknownFormat
 	}
-	if data[magicLen] != headerVersion {
-		return nil, 0, fmt.Errorf("unsupported header version: %d", data[magicLen])
+	hdrLen := ml + 4
+	if len(data) < hdrLen || data[ml] != headerVersion {
+		return nil, 0, ErrUnknownFormat
 	}
-	extLen := int(data[magicLen+3])
-	if headerBaseLen+extLen > len(data) {
+	extLen := int(data[ml+3])
+	if hdrLen+extLen > len(data) {
 		return nil, 0, ErrCorruptedData
 	}
 	h := &fileHeader{
-		algo: data[magicLen+1],
-		kdf:  data[magicLen+2],
-		ext:  string(data[headerBaseLen : headerBaseLen+extLen]),
+		algo: data[ml+1],
+		kdf:  data[ml+2],
+		ext:  string(data[hdrLen : hdrLen+extLen]),
 	}
-	return h, headerBaseLen + extLen, nil
+	return h, hdrLen + extLen, nil
 }
 
 func (h *fileHeader) algoString() string {
@@ -540,18 +549,26 @@ func streamEncryptChaCha(password []byte, in io.Reader, out io.Writer, ext strin
 // StreamDecrypt decrypts data from reader to writer, auto-detecting format.
 // Returns the original extension on success.
 func StreamDecrypt(password []byte, in io.Reader, out io.Writer) (string, error) {
-	// Read header magic to detect format.
-	var magicBuf [magicLen]byte
-	if _, err := io.ReadFull(in, magicBuf[:]); err != nil {
+	// Read enough bytes to detect format.
+	var magicBuf [oldMagicLen]byte
+	if _, err := io.ReadFull(in, magicBuf[:magicLen]); err != nil {
 		return "", ErrUnknownFormat
 	}
 
-	if string(magicBuf[:]) != magic {
-		// v1 format not supported via streaming (requires full data in memory).
-		return "", ErrUnknownFormat
+	if string(magicBuf[:magicLen]) == magic {
+		return streamDecryptV2(password, in, out)
 	}
 
-	return streamDecryptV2(password, in, out)
+	// Check for old magic (1 extra byte needed).
+	if _, err := io.ReadFull(in, magicBuf[magicLen:oldMagicLen]); err != nil {
+		return "", ErrUnknownFormat
+	}
+	if string(magicBuf[:oldMagicLen]) == oldMagic {
+		return streamDecryptV2(password, in, out)
+	}
+
+	// v1 format not supported via streaming.
+	return "", ErrUnknownFormat
 }
 
 func streamDecryptV2(password []byte, in io.Reader, out io.Writer) (string, error) {
@@ -733,9 +750,10 @@ func chachaDecryptV1(key, data []byte) ([]byte, string, error) {
 	return plaintext, ext, nil
 }
 
-// isV2Format reports whether data starts with the goenc magic.
+// isV2Format reports whether data starts with a known magic header.
 func isV2Format(data []byte) bool {
-	return len(data) >= magicLen && string(data[:magicLen]) == magic
+	return (len(data) >= magicLen && string(data[:magicLen]) == magic) ||
+		(len(data) >= oldMagicLen && string(data[:oldMagicLen]) == oldMagic)
 }
 
 // Public API.
@@ -965,7 +983,7 @@ func VerifyKey(password, data []byte) (bool, error) {
 // Key management.
 
 const (
-	identityLabel = "GO-ENCRYPTOR-SECRET-KEY-1"
+	identityLabel = "CIPHERIX-SECRET-KEY"
 	pubKeyLen     = 32
 )
 
@@ -1044,12 +1062,12 @@ func UnmarshalIdentity(data []byte) (*Identity, error) {
 
 // PublicKeyToRecipient returns the recipient string for a public key.
 func PublicKeyToRecipient(pub []byte) string {
-	return "goenc" + base64.RawStdEncoding.EncodeToString(pub)
+	return "cphx" + base64.RawStdEncoding.EncodeToString(pub)
 }
 
-// RecipientToPublicKey parses a goenc recipient string and returns a Recipient.
+// RecipientToPublicKey parses a cphx recipient string and returns a Recipient.
 func RecipientToPublicKey(recipient string) (Recipient, error) {
-	const prefix = "goenc"
+	const prefix = "cphx"
 	if len(recipient) < len(prefix) || recipient[:len(prefix)] != prefix {
 		return nil, errors.New("invalid recipient format")
 	}
@@ -1065,7 +1083,7 @@ func NewX25519Recipient(pub []byte) (Recipient, error) {
 	return newX25519Recipient(pub)
 }
 
-const keyStoreLabelV2 = "GO-ENCRYPTOR-KEY-1"
+const keyStoreLabelV2 = "CIPHERIX-KEY-1"
 
 type KeyStoreEntry struct {
 	Type      KeyType
@@ -1234,7 +1252,7 @@ func pubKeyEncrypt(recipientPub []byte, data []byte, ext string) ([]byte, error)
 	// Derive AES key via HKDF.
 	salt := make([]byte, saltLen)
 	rand.Read(salt)
-	hkdf := hkdf.New(sha256.New, sharedSecret, salt, []byte("go-encryptor-v2"))
+	hkdf := hkdf.New(sha256.New, sharedSecret, salt, []byte("cipherix-v2"))
 	aesKey := make([]byte, 32)
 	if _, err := io.ReadFull(hkdf, aesKey); err != nil {
 		return nil, err
@@ -1318,7 +1336,7 @@ func pubKeyDecrypt(seed []byte, data []byte) ([]byte, string, error) {
 			return nil, "", err
 		}
 		defer zeroBytes(sharedSecret)
-		hkdf := hkdf.New(sha256.New, sharedSecret, salt, []byte("go-encryptor-v2"))
+		hkdf := hkdf.New(sha256.New, sharedSecret, salt, []byte("cipherix-v2"))
 		aesKey := make([]byte, 32)
 		if _, err := io.ReadFull(hkdf, aesKey); err != nil {
 			return nil, "", err
@@ -1376,7 +1394,7 @@ func pubKeyDecrypt(seed []byte, data []byte) ([]byte, string, error) {
 		return nil, "", err
 	}
 	defer zeroBytes(sharedSecret)
-	hkdf := hkdf.New(sha256.New, sharedSecret, salt, []byte("go-encryptor-multi"))
+	hkdf := hkdf.New(sha256.New, sharedSecret, salt, []byte("cipherix-multi"))
 	wrapKey := make([]byte, 32)
 	if _, err := io.ReadFull(hkdf, wrapKey); err != nil {
 		return nil, "", err
@@ -1586,7 +1604,7 @@ func pubKeyMultiEncrypt(recipientPubs [][]byte, data []byte, ext string) ([]byte
 		if err != nil {
 			return nil, err
 		}
-		hkdf := hkdf.New(sha256.New, sharedSecret, salt, []byte("go-encryptor-multi"))
+		hkdf := hkdf.New(sha256.New, sharedSecret, salt, []byte("cipherix-multi"))
 		wrapKey := make([]byte, 32)
 		if _, err := io.ReadFull(hkdf, wrapKey); err != nil {
 			return nil, err

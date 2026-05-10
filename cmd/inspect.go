@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/mrinjamul/go-encryptor/crypt"
-	"github.com/mrinjamul/go-encryptor/utils"
+	"github.com/mrinjamul/cipherix/crypt"
+	"github.com/mrinjamul/cipherix/utils"
 	"github.com/spf13/cobra"
 )
 
@@ -15,6 +15,7 @@ func init() {
 
 var inspectCmd = &cobra.Command{
 	Use:   "inspect <encrypted-file>",
+	Aliases: []string{"ins"},
 	Short: "Display metadata about an encrypted file",
 	Long:  "Display metadata about an encrypted file without decrypting it.",
 	Args:  cobra.ExactArgs(1),

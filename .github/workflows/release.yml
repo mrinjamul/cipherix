@@ -8,8 +8,6 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        # GOOS: [darwin, linux, windows]
-        # GOARCH: [amd64]
         include:
           - GOOS: darwin
             GOARCH: amd64
@@ -30,15 +28,17 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.22"
-      - name: Build ${{ matrix.suffix }} (GOOS=${{ matrix.GOOS }}, GOARCH=${{ matrix.GOARCH }})
+          go-version: "1.24"
+      - name: Build ${{ matrix.suffix }}
         env:
           GOOS: ${{ matrix.GOOS }}
           GOARCH: ${{ matrix.GOARCH }}
         run: |
           mkdir -p ./artifacts
           go version
-          go build -o ./artifacts/go-encryptor-${GITHUB_REF##*/}-${{ matrix.suffix }}
+          go build \
+            -ldflags="-X 'github.com/mrinjamul/cipherix/utils.Version=${GITHUB_REF_NAME}'" \
+            -o "./artifacts/cipherix-${GITHUB_REF_NAME}-${{ matrix.suffix }}"
       - uses: actions/upload-artifact@v4
         with:
           name: artifacts-${{ matrix.suffix }}
@@ -54,9 +54,15 @@ jobs:
           pattern: artifacts-*
           merge-multiple: true
           path: ./artifacts
+      - name: Generate checksums
+        run: |
+          cd ./artifacts
+          sha256sum * > SHA256SUMS
+          cat SHA256SUMS
       - name: Publish artifacts
         uses: softprops/action-gh-release@v2
         with:
-          files: "./artifacts/*"
+          files: |
+            ./artifacts/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

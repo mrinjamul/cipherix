@@ -6,6 +6,9 @@ on:
   push:
     branches:
       - "*"
+    paths-ignore:
+      - "*.md"
+      - "docs/**"
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -13,21 +16,24 @@ jobs:
       fail-fast: false
       matrix:
         go_version:
-          - "1.22"
-          - "1.23"
+          - "1.24"
+          - "1.25"
     name: Test with Go ${{ matrix.go_version }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
           go-version: ${{ matrix.go_version }}
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-
       - name: Vet and test
         run: |
           go version
           go vet ./...
           go test -race -count=1 ./...
-      - name: Upload coverage
-        if: matrix.go_version == '1.23'
-        run: |
-          go test -coverprofile=coverage.out -covermode=atomic ./...
-          go tool cover -func=coverage.out

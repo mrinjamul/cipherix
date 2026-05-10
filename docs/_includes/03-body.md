@@ -6,7 +6,7 @@
 - **Keystore**: Store, import, export, and manage X25519 and RSA key pairs; auto-detects the right key on decrypt
 - **Keygen auto-keystore**: `keygen` automatically adds generated keys to the keystore
 - **Directory encryption**: Auto-tars before encrypting, streaming extraction on decrypt
-- **Automatic detection**: Algorithm and format auto-detected on decrypt (v1 and v2 `.lck` files)
+- **Automatic detection**: Algorithm and format auto-detected on decrypt (v1 and v2 `.chx` files)
 - **Streaming**: 64 KiB chunked AEAD - no intermediate files for decryption
 - **Glob expansion**: Encrypt/decrypt multiple files with `*` patterns
 - **Print to stdout**: Decrypt to stdout for piping to other tools
@@ -16,7 +16,7 @@
 - **Stdin mode**: Pipe data in/out when stdin is piped and no file arguments given
 - **File inspection**: `inspect` subcommand shows algorithm, KDF, original extension, armor status, and recipients without decrypting
 - **Progress bar**: Terminal progress bar auto-shows for large files (≥10 MB); `--no-progress` to suppress
-- **Built-in tar library**: `github.com/mrinjamul/go-encryptor/lib/tar`
+- **Built-in tar library**: `github.com/mrinjamul/cipherix/lib/tar`
 
 ---
 
@@ -25,18 +25,18 @@
 ### From source
 
 ```sh
-go install github.com/mrinjamul/go-encryptor@latest
+go install github.com/mrinjamul/cipherix@latest
 ```
 
 ### Pre-built binaries
 
-Download the latest release for your platform from the [releases page](https://github.com/mrinjamul/go-encryptor/releases).
+Download the latest release for your platform from the [releases page](https://github.com/mrinjamul/cipherix/releases).
 
 ### Build from source
 
 ```sh
-git clone https://github.com/mrinjamul/go-encryptor.git
-cd go-encryptor
+git clone https://github.com/mrinjamul/cipherix.git
+cd cipherix
 go build
 ```
 
@@ -49,9 +49,9 @@ Aliases: `en` for encrypt, `de` for decrypt.
 ### Password-based encryption
 
 ```sh
-go-encryptor encrypt -m aes -p "<password>" <file>
-go-encryptor encrypt -m chacha20 -p "<password>" <file>
-go-encryptor decrypt -p "<password>" <file.lck>
+cipherix encrypt -m aes -p "<password>" <file>
+cipherix encrypt -m chacha20 -p "<password>" <file>
+cipherix decrypt -p "<password>" <file.chx>
 ```
 
 The encryption method is auto-detected on decrypt (omit `-m`).
@@ -60,11 +60,11 @@ Read the password from an environment variable:
 
 ```sh
 export MY_SECRET="s3cret!"
-go-encryptor encrypt --password-env MY_SECRET <file>
-go-encryptor decrypt --password-env MY_SECRET <file.lck>
+cipherix encrypt --password-env MY_SECRET <file>
+cipherix decrypt --password-env MY_SECRET <file.chx>
 ```
 
-Encrypted output gets a `.lck` extension. The original file is **deleted** after encrypt unless `-k`/`--keep` is set. Decrypt also deletes the `.lck` file by default.
+Encrypted output gets a `.chx` extension. The original file is **deleted** after encrypt unless `-k`/`--keep` is set. Decrypt also deletes the `.chx` file by default.
 
 Passwords shorter than 8 characters or with low entropy (< 40 bits) trigger a warning — consider using a passphrase or the keystore workflow instead.
 
@@ -73,7 +73,7 @@ Passwords shorter than 8 characters or with low entropy (< 40 bits) trigger a wa
 Generate an identity key pair:
 
 ```sh
-go-encryptor keygen -o identity
+cipherix keygen -o identity
 ```
 
 The generated key is also automatically added to the keystore. The first keygen'd key becomes the keystore default.
@@ -81,25 +81,25 @@ The generated key is also automatically added to the keystore. The first keygen'
 Add an optional comment/label:
 
 ```sh
-go-encryptor keygen -o identity -c "my laptop key"
+cipherix keygen -o identity -c "my laptop key"
 ```
 
 Show the public key only (no file written):
 
 ```sh
-go-encryptor keygen -y
+cipherix keygen -y
 ```
 
 Encrypt to a recipient's public key:
 
 ```sh
-go-encryptor encrypt -r "goenc..." <file>
+cipherix encrypt -r "cphx..." <file>
 ```
 
 Decrypt with identity file:
 
 ```sh
-go-encryptor decrypt -i identity <file.lck>
+cipherix decrypt -i identity <file.chx>
 ```
 
 ### Multi-recipient encryption (GPG-style)
@@ -107,9 +107,9 @@ go-encryptor decrypt -i identity <file.lck>
 Encrypt to multiple public keys at once. Each recipient can decrypt independently:
 
 ```sh
-go-encryptor encrypt -k -r "goenc..." -r "goenc..." <file>
-go-encryptor decrypt -k -i identity1 <file.lck>   # recipient 1
-go-encryptor decrypt -k -i identity2 <file.lck>   # recipient 2
+cipherix encrypt -k -r "cphx..." -r "cphx..." <file>
+cipherix decrypt -k -i identity1 <file.chx>   # recipient 1
+cipherix decrypt -k -i identity2 <file.chx>   # recipient 2
 ```
 
 A single `-r` uses the original compact format. Multiple `-r` flags use a wrapped content key format where the data key is encrypted once per recipient.
@@ -120,20 +120,20 @@ Keys are stored in the platform config directory:
 
 | Platform | Path |
 |---|---|
-| Linux | `~/.config/go-encryptor/keystore/` |
-| macOS | `~/Library/Application Support/go-encryptor/keystore/` |
-| Windows | `%AppData%/go-encryptor/keystore/` |
+| Linux | `~/.config/cipherix/keystore/` |
+| macOS | `~/Library/Application Support/cipherix/keystore/` |
+| Windows | `%AppData%/cipherix/keystore/` |
 
 #### Manage keys
 
 ```sh
-go-encryptor keystore add <name>                  # generate a new key
-go-encryptor keystore add <name> <identity-file>  # import existing key
-go-encryptor keystore list                         # list all keys
-go-encryptor keystore show <name>                  # show key details
-go-encryptor keystore default <name>               # set default key
-go-encryptor keystore remove <name>                # delete a key
-go-encryptor keystore export <name> -o <file>      # export to identity file
+cipherix keystore add <name>                  # generate a new key
+cipherix keystore add <name> <identity-file>  # import existing key
+cipherix keystore list                         # list all keys
+cipherix keystore show <name>                  # show key details
+cipherix keystore default <name>               # set default key
+cipherix keystore remove <name>                # delete a key
+cipherix keystore export <name> -o <file>      # export to identity file
 ```
 
 The first key added automatically becomes the default.
@@ -141,13 +141,13 @@ The first key added automatically becomes the default.
 #### Encrypt with a keystore key (using recipient syntax)
 
 ```sh
-go-encryptor encrypt -r <name> <file>
+cipherix encrypt -r <name> <file>
 ```
 
 Decrypt auto-detects the right key from the keystore - no need to specify it:
 
 ```sh
-go-encryptor decrypt <file.lck>
+cipherix decrypt <file.chx>
 ```
 
 Decrypt priority (first match wins):
@@ -160,7 +160,7 @@ Decrypt priority (first match wins):
 ### Directory encryption
 
 ```sh
-go-encryptor encrypt -p "<password>" <directory>
+cipherix encrypt -p "<password>" <directory>
 ```
 
 The tool tars the directory and encrypts the tarball. On decrypt, the tar is extracted directly via streaming - no intermediate `.tez` file is created.
@@ -170,8 +170,8 @@ Decryption extracts to the current working directory by default. Use `-o <direct
 ### Print decrypted content to stdout
 
 ```sh
-go-encryptor decrypt --print file.lck > output.txt
-go-encryptor decrypt --print secrets.lck | gpg -d -
+cipherix decrypt --print file.chx > output.txt
+cipherix decrypt --print secrets.chx | gpg -d -
 ```
 
 Useful for piping decrypted data to other tools without writing to disk.
@@ -179,7 +179,7 @@ Useful for piping decrypted data to other tools without writing to disk.
 ### Glob patterns
 
 ```sh
-go-encryptor encrypt -p "pass" "*.txt" "*.md"
+cipherix encrypt -p "pass" "*.txt" "*.md"
 ```
 
 Glob patterns are expanded per argument. An error is raised if no files match a pattern.
@@ -189,12 +189,12 @@ Glob patterns are expanded per argument. An error is raised if no files match a 
 Show metadata about an encrypted file without decrypting it:
 
 ```sh
-go-encryptor inspect file.lck
+cipherix inspect file.chx
 ```
 
 Example output:
 ```
-File:    file.lck
+File:    file.chx
 Format:  1
 Method:  AES-256-GCM (password)
 KDF:     scrypt
@@ -210,13 +210,13 @@ For multi-recipient files, shows recipient count and per-entry hex identifiers. 
 Encrypt to an `ssh-ed25519` public key:
 
 ```sh
-go-encryptor encrypt -r "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI..." <file>
+cipherix encrypt -r "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI..." <file>
 ```
 
 Decrypt with the corresponding OpenSSH private key:
 
 ```sh
-go-encryptor decrypt -i ~/.ssh/id_ed25519 <file.lck>
+cipherix decrypt -i ~/.ssh/id_ed25519 <file.chx>
 ```
 
 No manual key conversion is needed. SSH RSA keys (`ssh-rsa`) are also supported - encrypt with `-r` using the public key, decrypt with `-i` using the OpenSSH private key.
@@ -226,13 +226,13 @@ No manual key conversion is needed. SSH RSA keys (`ssh-rsa`) are also supported 
 Encode the encrypted output as base64 ASCII armor for email, copy-paste, or text-friendly transport:
 
 ```sh
-go-encryptor encrypt -a -p "pass" <file>
+cipherix encrypt -a -p "pass" <file>
 ```
 
 Decryption auto-detects the armor format - no separate flag is needed:
 
 ```sh
-go-encryptor decrypt -p "pass" <file.lck>
+cipherix decrypt -p "pass" <file.chx>
 ```
 
 ### Stdin mode
@@ -240,8 +240,8 @@ go-encryptor decrypt -p "pass" <file.lck>
 When stdin is a pipe (not a terminal) and no file arguments are given, input is read from stdin. By default encrypted output goes to stdout:
 
 ```sh
-cat secret.txt | go-encryptor encrypt -p "pass" > secret.lck
-cat secret.lck | go-encryptor decrypt -p "pass"
+cat secret.txt | cipherix encrypt -p "pass" > secret.chx
+cat secret.chx | cipherix decrypt -p "pass"
 ```
 
 Use `-o <file>` to write encrypted output to a file instead of stdout.
@@ -267,16 +267,16 @@ Use `-o <file>` to write encrypted output to a file instead of stdout.
 
 ```sh
 # bash
-source <(go-encryptor completion bash)
+source <(cipherix completion bash)
 
 # zsh
-source <(go-encryptor completion zsh)
+source <(cipherix completion zsh)
 
 # fish
-go-encryptor completion fish | source
+cipherix completion fish | source
 
 # powershell
-go-encryptor completion powershell | Out-String | Invoke-Expression
+cipherix completion powershell | Out-String | Invoke-Expression
 ```
 
 ---
@@ -286,7 +286,7 @@ go-encryptor completion powershell | Out-String | Invoke-Expression
 The streaming tar library can be imported standalone:
 
 ```go
-import "github.com/mrinjamul/go-encryptor/lib/tar"
+import "github.com/mrinjamul/cipherix/lib/tar"
 
 // Create a tar archive streaming to w
 tar.Create(w io.Writer, paths []string, opts *Options) error

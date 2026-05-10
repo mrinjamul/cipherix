@@ -7,8 +7,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/mrinjamul/go-encryptor/crypt"
-	"github.com/mrinjamul/go-encryptor/utils"
+	"github.com/mrinjamul/cipherix/crypt"
+	"github.com/mrinjamul/cipherix/utils"
 	"github.com/spf13/cobra"
 )
 
@@ -19,7 +19,7 @@ func keystoreDir() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(cfgDir, "go-encryptor", "keystore"), nil
+	return filepath.Join(cfgDir, "cipherix", "keystore"), nil
 }
 
 func ensureKeystoreDir() (string, error) {
@@ -200,13 +200,14 @@ func listKeys() ([]string, error) {
 
 var keystoreCmd = &cobra.Command{
 	Use:   "keystore",
+	Aliases: []string{"ks"},
 	Short: "Manage stored encryption keys",
 	Long: `Manage key pairs in the platform keystore.
 
 Keys are stored in:
-  Linux:   ~/.config/go-encryptor/keystore/
-  macOS:   ~/Library/Application Support/go-encryptor/keystore/
-  Windows: %AppData%/go-encryptor/keystore/
+  Linux:   ~/.config/cipherix/keystore/
+  macOS:   ~/Library/Application Support/cipherix/keystore/
+  Windows: %AppData%/cipherix/keystore/
 
 Supports X25519 (generated) and RSA (imported) keys.
 The default key is tried first by decrypt when no -i flag is given.`,
@@ -221,7 +222,7 @@ var keystoreAddCmd = &cobra.Command{
 	Long: `Add a key to the keystore.
 
 With no identity-file argument, a new X25519 key pair is generated.
-With an identity-file argument, the key is imported (supports go-encryptor native format,
+With an identity-file argument, the key is imported (supports cipherix native format,
 OpenSSH private keys: Ed25519 and RSA).
 
 The first key added automatically becomes the default key.`,

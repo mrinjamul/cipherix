@@ -32,9 +32,9 @@ import (
 	"sync"
 	"syscall"
 
-	"github.com/mrinjamul/go-encryptor/crypt"
-	"github.com/mrinjamul/go-encryptor/lib/tar"
-	"github.com/mrinjamul/go-encryptor/utils"
+	"github.com/mrinjamul/cipherix/crypt"
+	"github.com/mrinjamul/cipherix/lib/tar"
+	"github.com/mrinjamul/cipherix/utils"
 	"github.com/spf13/cobra"
 )
 
@@ -80,7 +80,7 @@ func removeCleanupFile(path string) {
 // to a Recipient. Returns os.IsNotExist errors for not-found.
 // Skips lookup for inline key formats or overly long strings.
 func lookupRecipient(name string) (crypt.Recipient, error) {
-	if strings.HasPrefix(name, "goenc") || strings.HasPrefix(name, "ssh-") || len(name) > 64 {
+	if strings.HasPrefix(name, "cphx") || strings.HasPrefix(name, "ssh-") || len(name) > 64 {
 		return nil, os.ErrNotExist
 	}
 	name = sanitizeKeyName(name)
@@ -416,7 +416,7 @@ func init() {
 	encryptCmd.Flags().StringVarP(&methodOpt, "method", "m", "aes", "Encryption method (aes, chacha20)")
 	encryptCmd.Flags().StringVarP(&passwordOpt, "password", "p", "", "Password")
 	encryptCmd.Flags().StringVarP(&passwordEnv, "password-env", "", "", "Read password from environment variable")
-	encryptCmd.Flags().StringArrayVarP(&recipientOpt, "recipient", "r", nil, "Encrypt to public key: keystore name, goenc... string, SSH key file, or inline SSH key (repeatable)")
+	encryptCmd.Flags().StringArrayVarP(&recipientOpt, "recipient", "r", nil, "Encrypt to public key: keystore name, cphx... string, SSH key file, or inline SSH key (repeatable)")
 	encryptCmd.Flags().StringVarP(&outputOpt, "output", "o", "", "Output file path")
 	encryptCmd.Flags().BoolVar(&noProgress, "no-progress", false, "Disable progress bar")
 

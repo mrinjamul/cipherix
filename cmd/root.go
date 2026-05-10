@@ -31,15 +31,15 @@ import (
 
 var (
 	cfgFile      string
-	AppExtension = ".lck"
+	AppExtension = ".chx"
 )
 
 // rootCmd represents the base command when called without any subcommands
 var rootCmd = &cobra.Command{
-	Use:   "go-encryptor",
-	Short: "go-encryptor: encrypt file using password",
-	Long: `go-encryptor: A file encryptor.
-go-encryptor is created to be as simple as possible to help you
+	Use:   "cipherix",
+	Short: "cipherix: file encryption CLI tool",
+	Long: `cipherix: A file encryption tool.
+cipherix is created to be as simple as possible to help you
 encrypt and decrypt files.`,
 	// Uncomment the following line if your bare application
 	// has an action associated with it:
@@ -62,7 +62,7 @@ func init() {
 	// Cobra supports persistent flags, which, if defined here,
 	// will be global for your application.
 
-	// rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default is $HOME/.go-encryptor.yaml)")
+	// rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default is $HOME/.cipherix.yaml)")
 
 	// Cobra also supports local flags, which will only run
 	// when this action is called directly.
@@ -82,9 +82,9 @@ func initConfig() {
 			os.Exit(1)
 		}
 
-		// Search config in home directory with name ".go-encryptor" (without extension).
+		// Search config in home directory with name ".cipherix" (without extension).
 		viper.AddConfigPath(home)
-		viper.SetConfigName(".go-encryptor")
+		viper.SetConfigName(".cipherix")
 	}
 
 	viper.AutomaticEnv() // read in environment variables that match

@@ -21,7 +21,7 @@ THE SOFTWARE.
 */
 package main
 
-import "github.com/mrinjamul/go-encryptor/cmd"
+import "github.com/mrinjamul/cipherix/cmd"
 
 func main() {
 	cmd.Execute()

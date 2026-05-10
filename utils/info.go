@@ -3,8 +3,11 @@
  */
 package utils
 
-// GetVersion return code of the application
+// Version is set at build time via -ldflags.
+// Default fallback for local builds without ldflags.
+var Version = "dev"
+
+// GetVersion return the version of the application
 func GetVersion() string {
-	version := "2.1.0"
-	return version
+	return Version
 }

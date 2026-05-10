@@ -24,7 +24,7 @@ package cmd
 import (
 	"fmt"
 
-	"github.com/mrinjamul/go-encryptor/utils"
+	"github.com/mrinjamul/cipherix/utils"
 	"github.com/spf13/cobra"
 )
 
@@ -37,7 +37,7 @@ var versionCmd = &cobra.Command{
 }
 
 func versionRun(cmd *cobra.Command, args []string) {
-	fmt.Println("go-encryptor version " + utils.GetVersion())
+	fmt.Println("cipherix version " + utils.GetVersion())
 }
 
 func init() {

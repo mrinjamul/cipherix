@@ -1,23 +1,23 @@
-name: go-encryptor
+name: cipherix
 base: core24
-version: "2.1.0"
-summary: A simple file encryptor
+version: "3.0.0"
+summary: A file encryption CLI tool
 description: |
-  go-encryptor is created to be as simple as possible to help you
-  encrypt and decrypt files.
+  cipherix is a file encryption tool supporting AES-256-GCM,
+  XChaCha20-Poly1305, X25519 ECDH, and RSA-OAEP with a keystore.
 
 grade: stable
 confinement: strict
 
 apps:
-  go-encryptor:
-    command: bin/go-encryptor
+  cipherix:
+    command: bin/cipherix
     plugs:
       - home
       - removable-media
 
 parts:
-  go-encryptor:
+  cipherix:
     plugin: go
     source: .
     build-snaps:

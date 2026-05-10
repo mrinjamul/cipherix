@@ -1,4 +1,4 @@
-module github.com/mrinjamul/go-encryptor
+module github.com/mrinjamul/cipherix
 
 go 1.24.0
 

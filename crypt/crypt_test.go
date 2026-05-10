@@ -490,7 +490,7 @@ func TestMarshalUnmarshalIdentity(t *testing.T) {
 	if !strings.HasPrefix(string(data), identityLabel) {
 		t.Fatalf("expected label prefix, got %q", string(data[:20]))
 	}
-	if !strings.Contains(string(data), "# public: goenc") {
+	if !strings.Contains(string(data), "# public: cphx") {
 		t.Fatalf("expected public key comment, got %q", string(data))
 	}
 
@@ -533,8 +533,8 @@ func TestPublicKeyToRecipientRoundtrip(t *testing.T) {
 	}
 
 	recipient := PublicKeyToRecipient(id.Public)
-	if !strings.HasPrefix(recipient, "goenc") {
-		t.Fatalf("expected goenc prefix, got %q", recipient)
+	if !strings.HasPrefix(recipient, "cphx") {
+		t.Fatalf("expected cphx prefix, got %q", recipient)
 	}
 
 	pubKey, err := RecipientToPublicKey(recipient)
@@ -551,7 +551,7 @@ func TestRecipientToPublicKeyInvalid(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for invalid recipient")
 	}
-	_, err = RecipientToPublicKey("goenc!!!invalid-base64!!!")
+	_, err = RecipientToPublicKey("cphx!!!invalid-base64!!!")
 	if err == nil {
 		t.Fatal("expected error for invalid base64 recipient")
 	}
@@ -793,10 +793,12 @@ func TestIsV2FormatEdgeCases(t *testing.T) {
 	}{
 		{"empty", []byte{}, false},
 		{"4 bytes", []byte("goen"), false},
-		{"exact 5 magic", []byte("goenc"), true},
-		{"6 bytes with magic", []byte("goencx"), true},
+		{"exact magic", []byte("cphx"), true},
+		{"longer magic", []byte("cphxx"), true},
+		{"old magic", []byte("goenc"), true},
 		{"no magic", []byte("hello"), false},
-		{"partial magic", []byte("goe"), false},
+		{"partial magic", []byte("cph"), false},
+		{"old partial", []byte("goe"), false},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -973,7 +975,7 @@ func TestStreamDecryptV2UnsupportedAlgo(t *testing.T) {
 }
 
 func TestInspectV1Data(t *testing.T) {
-	_, _, err := Inspect([]byte("not-goenc"))
+	_, _, err := Inspect([]byte("not-cphx"))
 	if err == nil {
 		t.Fatal("expected error for non-v2 data")
 	}
@@ -1306,10 +1308,10 @@ func TestParseSSHRecipientInvalid(t *testing.T) {
 }
 
 func TestParseSSHRecipientGoEncFormat(t *testing.T) {
-	// goenc... recipients should NOT be parsed by ParseSSHRecipient
-	_, err := ParseSSHRecipient("goencdeadbeef")
+	// cphx... recipients should NOT be parsed by ParseSSHRecipient
+	_, err := ParseSSHRecipient("cphxdeadbeef")
 	if err == nil {
-		t.Fatal("expected error for goenc recipient")
+		t.Fatal("expected error for cphx recipient")
 	}
 }
 
@@ -1627,6 +1629,124 @@ func TestInspectFileInfoRSAMulti(t *testing.T) {
 		if len(id) != 16 {
 			t.Errorf("recipient %d ID length is %d, want 16", i+1, len(id))
 		}
+	}
+}
+
+// TestDecryptOldMagicBackwardCompat verifies that data encrypted with the
+// old "goenc" magic header can still be decrypted by the current code.
+func TestDecryptOldMagicBackwardCompat(t *testing.T) {
+	password := []byte("backward-compat-password")
+	plaintext := []byte("old format data for backward compat test")
+	ext := "txt"
+
+	// Encrypt with new format, then patch magic to old format.
+	ct, err := Encrypt(password, plaintext, "aes", ext)
+	if err != nil {
+		t.Fatalf("Encrypt: %v", err)
+	}
+	oldCT := make([]byte, len(ct)+1)
+	copy(oldCT[:5], "goenc")
+	copy(oldCT[5:], ct[magicLen:])
+
+	// Verify isV2Format recognizes old magic.
+	if !isV2Format(oldCT) {
+		t.Fatal("isV2Format should detect old magic")
+	}
+
+	// Verify parseHeader parses old-format header.
+	hdr, hdrLen, err := parseHeader(oldCT)
+	if err != nil {
+		t.Fatalf("parseHeader with old magic: %v", err)
+	}
+	if hdr.algo != algoAES {
+		t.Fatalf("expected algo AES (%d), got %d", algoAES, hdr.algo)
+	}
+	if hdr.ext != ext {
+		t.Fatalf("expected ext %q, got %q", ext, hdr.ext)
+	}
+	if hdrLen < 9 {
+		t.Fatalf("header length too small for old format: %d", hdrLen)
+	}
+
+	// Decrypt with old-format data.
+	decrypted, gotExt, err := Decrypt(password, oldCT)
+	if err != nil {
+		t.Fatalf("Decrypt with old magic: %v", err)
+	}
+	if !bytes.Equal(decrypted, plaintext) {
+		t.Fatalf("Decrypt data mismatch: got %q, want %q", string(decrypted), string(plaintext))
+	}
+	if gotExt != ext {
+		t.Fatalf("Decrypt ext mismatch: got %q, want %q", gotExt, ext)
+	}
+
+	// Also test StreamDecrypt with old magic.
+	var buf bytes.Buffer
+	streamExt, err := StreamDecrypt(password, bytes.NewReader(oldCT), &buf)
+	if err != nil {
+		t.Fatalf("StreamDecrypt with old magic: %v", err)
+	}
+	if streamExt != ext {
+		t.Fatalf("StreamDecrypt ext mismatch: got %q, want %q", streamExt, ext)
+	}
+	if !bytes.Equal(buf.Bytes(), plaintext) {
+		t.Fatalf("StreamDecrypt data mismatch: got %q, want %q", string(buf.Bytes()), string(plaintext))
+	}
+}
+
+// TestDecryptOldMagicChaCha verifies old-magic backward compat with ChaCha20.
+func TestDecryptOldMagicChaCha(t *testing.T) {
+	password := []byte("chacha-old-magic")
+	plaintext := []byte("chacha20 old format data")
+	ext := "dat"
+
+	ct, err := Encrypt(password, plaintext, "chacha20", ext)
+	if err != nil {
+		t.Fatalf("Encrypt ChaCha20: %v", err)
+	}
+	oldCT := make([]byte, len(ct)+1)
+	copy(oldCT[:5], "goenc")
+	copy(oldCT[5:], ct[magicLen:])
+
+	decrypted, gotExt, err := Decrypt(password, oldCT)
+	if err != nil {
+		t.Fatalf("Decrypt old-magic ChaCha20: %v", err)
+	}
+	if !bytes.Equal(decrypted, plaintext) {
+		t.Fatalf("data mismatch: got %q, want %q", string(decrypted), string(plaintext))
+	}
+	if gotExt != ext {
+		t.Fatalf("ext mismatch: got %q, want %q", gotExt, ext)
+	}
+}
+
+// TestDecryptOldMagicPubKey verifies old-magic backward compat with pubkey encryption.
+func TestDecryptOldMagicPubKey(t *testing.T) {
+	id, err := GenerateIdentity("old-magic-test")
+	if err != nil {
+		t.Fatalf("GenerateIdentity: %v", err)
+	}
+	plaintext := []byte("pubkey old format data")
+	ext := "secret"
+
+	recip, _ := NewX25519Recipient(id.Public)
+	ct, err := EncryptToPublicKey(recip, plaintext, ext)
+	if err != nil {
+		t.Fatalf("EncryptToPublicKey: %v", err)
+	}
+	oldCT := make([]byte, len(ct)+1)
+	copy(oldCT[:5], "goenc")
+	copy(oldCT[5:], ct[magicLen:])
+
+	decrypted, gotExt, err := DecryptWithIdentity(id, oldCT)
+	if err != nil {
+		t.Fatalf("DecryptWithIdentity old magic: %v", err)
+	}
+	if !bytes.Equal(decrypted, plaintext) {
+		t.Fatalf("data mismatch: got %q, want %q", string(decrypted), string(plaintext))
+	}
+	if gotExt != ext {
+		t.Fatalf("ext mismatch: got %q, want %q", gotExt, ext)
 	}
 }
 

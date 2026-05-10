@@ -14,6 +14,7 @@
 test-data/
 *.aes
 *.lck
+*.chx
 *.jpg
 *.mp3
 *.mp4
@@ -23,7 +24,7 @@ test-data/
 
 
 # Output of the go coverage tool, specifically when used with LiteIDE
-go-encryptor
+cipherix
 /releases
 *.out
 
