@@ -376,6 +376,7 @@ func aesDecryptV2(password []byte, payload []byte, isV3 bool) ([]byte, string, e
 	if err != nil {
 		return nil, "", err
 	}
+	defer zeroBytes(dk)
 
 	blockCipher, err := aes.NewCipher(dk)
 	if err != nil {
@@ -395,7 +396,7 @@ func aesDecryptV2(password []byte, payload []byte, isV3 bool) ([]byte, string, e
 		// First chunk is metadata (authenticated extension).
 		first, err := readChunk(r, gcm, masterNonce, 0)
 		if err != nil {
-			return nil, "", err
+			return nil, "", ErrWrongPassword
 		}
 		if first == nil {
 			return nil, "", ErrCorruptedData
@@ -499,6 +500,7 @@ func chachaDecryptV2(password []byte, payload []byte, isV3 bool) ([]byte, string
 	chunkData := payload[saltLen+NonceSize:]
 
 	dk := deriveKeyChaCha(password, salt)
+	defer zeroBytes(dk)
 	aead, err := chacha20poly1305.NewX(dk)
 	if err != nil {
 		return nil, "", err
@@ -569,6 +571,7 @@ func streamEncryptAES(password []byte, in io.Reader, out io.Writer, ext string) 
 	if err != nil {
 		return 0, err
 	}
+	defer zeroBytes(dk)
 
 	blockCipher, err := aes.NewCipher(dk)
 	if err != nil {
@@ -647,6 +650,7 @@ func streamEncryptChaCha(password []byte, in io.Reader, out io.Writer, ext strin
 	}
 
 	dk := deriveKeyChaCha(password, salt)
+	defer zeroBytes(dk)
 	aead, err := chacha20poly1305.NewX(dk)
 	if err != nil {
 		return 0, err
@@ -786,6 +790,7 @@ func streamDecryptAES(password []byte, in io.Reader, out io.Writer, salt []byte,
 	if err != nil {
 		return err
 	}
+	defer zeroBytes(dk)
 
 	blockCipher, err := aes.NewCipher(dk)
 	if err != nil {
@@ -805,7 +810,7 @@ func streamDecryptAES(password []byte, in io.Reader, out io.Writer, salt []byte,
 	if isV3 {
 		first, err := readChunk(in, gcm, masterNonce, 0)
 		if err != nil {
-			return err
+			return ErrWrongPassword
 		}
 		if first == nil {
 			return ErrCorruptedData
@@ -841,6 +846,7 @@ func streamDecryptAES(password []byte, in io.Reader, out io.Writer, salt []byte,
 
 func streamDecryptChaCha(password []byte, in io.Reader, out io.Writer, salt []byte, kdfType byte, isV3 bool, authExt *string) error {
 	dk := deriveKeyChaCha(password, salt)
+	defer zeroBytes(dk)
 	aead, err := chacha20poly1305.NewX(dk)
 	if err != nil {
 		return err
@@ -855,7 +861,7 @@ func streamDecryptChaCha(password []byte, in io.Reader, out io.Writer, salt []by
 	if isV3 {
 		first, err := readChunk(in, aead, masterNonce, 0)
 		if err != nil {
-			return err
+			return ErrWrongPassword
 		}
 		if first == nil {
 			return ErrCorruptedData
@@ -906,15 +912,13 @@ func aesDecryptV1(key, data []byte) ([]byte, string, error) {
 	if err != nil {
 		return nil, "", err
 	}
+	defer zeroBytes(dk)
 
 	blockCipher, err := aes.NewCipher(dk)
 	if err != nil {
 		return nil, "", err
 	}
 	gcm, err := cipher.NewGCM(blockCipher)
-	if err != nil {
-		return nil, "", err
-	}
 
 	nonce := ciphertext[:12]
 	ct := ciphertext[12:]
@@ -942,6 +946,7 @@ func chachaDecryptV1(key, data []byte) ([]byte, string, error) {
 	ciphertext := data[:len(data)-saltLen-NonceSize]
 
 	dk := deriveKeyChaCha(key, salt)
+	defer zeroBytes(dk)
 
 	aead, err := chacha20poly1305.NewX(dk)
 	if err != nil {
@@ -1111,6 +1116,9 @@ func InspectFileInfo(data []byte) (*FileInfo, error) {
 	case algoPubKeyRSA:
 		fi.NumRecipients = 1
 		off := 0
+		if len(payload) < 2 {
+			return nil, ErrCorruptedData
+		}
 		wrapLen := int(binary.BigEndian.Uint16(payload[off:]))
 		off += 2
 		wrapped := payload[off : off+wrapLen]
@@ -1128,8 +1136,14 @@ func InspectFileInfo(data []byte) (*FileInfo, error) {
 		fi.NumRecipients = numRecipients
 		off += entryHeadSize
 		for i := 0; i < numRecipients; i++ {
+			if off+2 > len(payload) {
+				return nil, ErrCorruptedData
+			}
 			wrapLen := int(binary.BigEndian.Uint16(payload[off:]))
 			off += 2
+			if off+wrapLen > len(payload) {
+				return nil, ErrCorruptedData
+			}
 			wrapped := payload[off : off+wrapLen]
 			off += wrapLen
 			h := sha256.Sum256(wrapped)
@@ -1148,16 +1162,28 @@ func InspectFileInfo(data []byte) (*FileInfo, error) {
 		fi.NumRecipients = numRecipients
 		off += entryHeadSize
 		for i := 0; i < numRecipients; i++ {
+			if off >= len(payload) {
+				return nil, ErrCorruptedData
+			}
 			entryType := payload[off]
 			off++
 			var wrapped []byte
 			if entryType == 0 {
+				if off+wrapNonceSize+wrappedContentSize > len(payload) {
+					return nil, ErrCorruptedData
+				}
 				off += wrapNonceSize
 				wrapped = payload[off : off+wrappedContentSize]
 				off += wrappedContentSize
 			} else {
+				if off+2 > len(payload) {
+					return nil, ErrCorruptedData
+				}
 				wrapLen := int(binary.BigEndian.Uint16(payload[off:]))
 				off += 2
+				if off+wrapLen > len(payload) {
+					return nil, ErrCorruptedData
+				}
 				wrapped = payload[off : off+wrapLen]
 				off += wrapLen
 			}
@@ -1465,7 +1491,9 @@ func pubKeyEncrypt(recipientPub []byte, data []byte, ext string) ([]byte, error)
 
 	// Derive AES key via HKDF.
 	salt := make([]byte, saltLen)
-	rand.Read(salt)
+	if _, err := rand.Read(salt); err != nil {
+		return nil, err
+	}
 	hkdf := hkdf.New(sha256.New, sharedSecret, salt, []byte("cipherix-v2"))
 	aesKey := make([]byte, 32)
 	if _, err := io.ReadFull(hkdf, aesKey); err != nil {
@@ -1589,8 +1617,9 @@ func pubKeyDecrypt(seed []byte, data []byte) ([]byte, string, error) {
 		if isV3 {
 			authExt, err = readMetadataChunk(r, gcm, masterNonce, &idx, &plaintext)
 			if err != nil {
-				return nil, "", err
+				return nil, "", ErrWrongPassword
 			}
+
 		}
 		if err := decryptChunks(r, gcm, masterNonce, idx, &plaintext); err != nil {
 			return nil, "", ErrWrongPassword
@@ -1680,7 +1709,7 @@ func pubKeyDecrypt(seed []byte, data []byte) ([]byte, string, error) {
 	if isV3 {
 		authExt, err = readMetadataChunk(r, dataGCM, dataNonce, &idx, &plaintext)
 		if err != nil {
-			return nil, "", err
+			return nil, "", ErrWrongPassword
 		}
 	}
 	if err := decryptChunks(r, dataGCM, dataNonce, idx, &plaintext); err != nil {

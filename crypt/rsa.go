@@ -155,7 +155,7 @@ func rsaSingleDecrypt(priv *rsa.PrivateKey, data []byte) ([]byte, string, error)
 	if isV3 {
 		authExt, err = readMetadataChunk(r, gcm, masterNonce, &idx, &plaintext)
 		if err != nil {
-			return nil, "", err
+			return nil, "", ErrWrongPassword
 		}
 	}
 	if err := decryptChunks(r, gcm, masterNonce, idx, &plaintext); err != nil {
@@ -334,7 +334,7 @@ func rsaMultiDecrypt(priv *rsa.PrivateKey, data []byte) ([]byte, string, error) 
 	if isV3 {
 		authExt, err = readMetadataChunk(r, gcm, dataNonce, &idx, &plaintext)
 		if err != nil {
-			return nil, "", err
+			return nil, "", ErrWrongPassword
 		}
 	}
 	if err := decryptChunks(r, gcm, dataNonce, idx, &plaintext); err != nil {
@@ -626,7 +626,7 @@ func hybridDecrypt(priv PrivateKey, data []byte) ([]byte, string, error) {
 	if isV3 {
 		authExt, err = readMetadataChunk(r, gcm, dataNonce, &idx, &plaintext)
 		if err != nil {
-			return nil, "", err
+			return nil, "", ErrWrongPassword
 		}
 	}
 	if err := decryptChunks(r, gcm, dataNonce, idx, &plaintext); err != nil {
