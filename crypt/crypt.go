@@ -219,41 +219,6 @@ func readChunk(in io.Reader, gcm cipher.AEAD, masterNonce []byte, idx uint32) ([
 	return gcm.Open(nil, nonce, ciphertext, nil)
 }
 
-// writeTerminator writes the chunk terminator and total chunk count footer.
-// The footer enables truncation detection on decrypt.
-func writeTerminatorAndFooter(w io.Writer, numChunks uint32) error {
-	var term [chunkLenSize]byte
-	binary.BigEndian.PutUint32(term[:], chunkTerm)
-	if _, err := w.Write(term[:]); err != nil {
-		return err
-	}
-	var footer [4]byte
-	binary.BigEndian.PutUint32(footer[:], numChunks)
-	_, err := w.Write(footer[:])
-	return err
-}
-
-// readTerminatorAndFooter reads past the chunk terminator and optional
-// chunk count footer. Returns an error if the footer is present but doesn't
-// match the number of chunks actually read.
-func readTerminatorAndFooter(r io.Reader, numChunks uint32) error {
-	// Read terminator (4 zero bytes).
-	var term [chunkLenSize]byte
-	if _, err := io.ReadFull(r, term[:]); err != nil {
-		return err
-	}
-	// Try to read the optional 4-byte footer.
-	var footer [4]byte
-	if _, err := io.ReadFull(r, footer[:]); err != nil {
-		return nil // old format without footer, skip check
-	}
-	expected := binary.BigEndian.Uint32(footer[:])
-	if numChunks != expected {
-		return ErrCorruptedData
-	}
-	return nil
-}
-
 // readMetadataChunk decrypts and extracts the authenticated extension from
 // the first chunk (v3+ format). For v1 files, returns empty string.
 // On success, idx is set to 1 (past the metadata chunk) and buf receives
@@ -278,6 +243,38 @@ func readMetadataChunk(r io.Reader, aead cipher.AEAD, masterNonce []byte, idx *u
 	return authExt, nil
 }
 
+// writeAuthFooter writes a 0-length terminator (end-of-data marker) followed
+// by an AEAD-protected final chunk containing the chunk count at index
+// numChunks. The terminator preserves backward compatibility with the data
+// chunk loop, while the AEAD-protected footer prevents undetected truncation.
+func writeAuthFooter(w io.Writer, aead cipher.AEAD, masterNonce []byte, numChunks uint32) error {
+	var term [chunkLenSize]byte
+	binary.BigEndian.PutUint32(term[:], chunkTerm)
+	if _, err := w.Write(term[:]); err != nil {
+		return err
+	}
+	var pt [4]byte
+	binary.BigEndian.PutUint32(pt[:], numChunks)
+	return writeChunk(w, aead, masterNonce, numChunks, pt[:])
+}
+
+// readAuthFooter reads and verifies the AEAD-protected final chunk
+// that follows the data chunk terminator. Returns ErrCorruptedData if
+// the chunk count doesn't match or the AEAD authentication fails.
+func readAuthFooter(r io.Reader, aead cipher.AEAD, masterNonce []byte, numChunks uint32) error {
+	pt, err := readChunk(r, aead, masterNonce, numChunks)
+	if err != nil {
+		return ErrCorruptedData
+	}
+	if pt == nil || len(pt) < 4 {
+		return ErrCorruptedData
+	}
+	if binary.BigEndian.Uint32(pt[:4]) != numChunks {
+		return ErrCorruptedData
+	}
+	return nil
+}
+
 // decryptChunks reads and decrypts all remaining chunks starting at idx,
 // writing plaintext to buf. Returns the terminator/footer error.
 func decryptChunks(r io.Reader, aead cipher.AEAD, masterNonce []byte, idx uint32, buf *bytes.Buffer) error {
@@ -292,7 +289,7 @@ func decryptChunks(r io.Reader, aead cipher.AEAD, masterNonce []byte, idx uint32
 		buf.Write(pt)
 		idx++
 	}
-	return readTerminatorAndFooter(r, idx)
+	return readAuthFooter(r, aead, masterNonce, idx)
 }
 
 // v2 format encrypt/decrypt (chunked AEAD).
@@ -360,7 +357,7 @@ func aesEncryptV2(password []byte, data []byte, ext string) ([]byte, error) {
 		}
 		idx++
 	}
-	if err := writeTerminatorAndFooter(&buf, idx); err != nil {
+	if err := writeAuthFooter(&buf, gcm, masterNonce, idx); err != nil {
 		return nil, err
 	}
 
@@ -425,7 +422,7 @@ func aesDecryptV2(password []byte, payload []byte, isV3 bool) ([]byte, string, e
 		plaintext.Write(pt)
 		idx++
 	}
-	if err := readTerminatorAndFooter(r, idx); err != nil {
+	if err := readAuthFooter(r, gcm, masterNonce, idx); err != nil {
 		return nil, "", err
 	}
 	return plaintext.Bytes(), authExt, nil
@@ -486,7 +483,7 @@ func chachaEncryptV2(password []byte, data []byte, ext string) ([]byte, error) {
 		}
 		idx++
 	}
-	if err := writeTerminatorAndFooter(&buf, idx); err != nil {
+	if err := writeAuthFooter(&buf, aead, masterNonce, idx); err != nil {
 		return nil, err
 	}
 
@@ -542,7 +539,7 @@ func chachaDecryptV2(password []byte, payload []byte, isV3 bool) ([]byte, string
 		plaintext.Write(pt)
 		idx++
 	}
-	if err := readTerminatorAndFooter(r, idx); err != nil {
+	if err := readAuthFooter(r, aead, masterNonce, idx); err != nil {
 		return nil, "", err
 	}
 	return plaintext.Bytes(), authExt, nil
@@ -637,7 +634,7 @@ func streamEncryptAES(password []byte, in io.Reader, out io.Writer, ext string) 
 		written += int64(n)
 		idx++
 	}
-	if err := writeTerminatorAndFooter(out, idx); err != nil {
+	if err := writeAuthFooter(out, gcm, masterNonce, idx); err != nil {
 		return written, err
 	}
 	return written, nil
@@ -709,7 +706,7 @@ func streamEncryptChaCha(password []byte, in io.Reader, out io.Writer, ext strin
 		written += int64(n)
 		idx++
 	}
-	if err := writeTerminatorAndFooter(out, idx); err != nil {
+	if err := writeAuthFooter(out, aead, masterNonce, idx); err != nil {
 		return written, err
 	}
 	return written, nil
@@ -839,7 +836,7 @@ func streamDecryptAES(password []byte, in io.Reader, out io.Writer, salt []byte,
 		}
 		idx++
 	}
-	return readTerminatorAndFooter(in, idx)
+	return readAuthFooter(in, gcm, masterNonce, idx)
 }
 
 func streamDecryptChaCha(password []byte, in io.Reader, out io.Writer, salt []byte, kdfType byte, isV3 bool, authExt *string) error {
@@ -889,7 +886,7 @@ func streamDecryptChaCha(password []byte, in io.Reader, out io.Writer, salt []by
 		}
 		idx++
 	}
-	return readTerminatorAndFooter(in, idx)
+	return readAuthFooter(in, aead, masterNonce, idx)
 }
 
 // v1 (old format) compat helpers.
@@ -1527,7 +1524,7 @@ func pubKeyEncrypt(recipientPub []byte, data []byte, ext string) ([]byte, error)
 		}
 		idx++
 	}
-	if err := writeTerminatorAndFooter(&buf, idx); err != nil {
+	if err := writeAuthFooter(&buf, gcm, masterNonce, idx); err != nil {
 		return nil, err
 	}
 
@@ -1908,7 +1905,7 @@ func pubKeyMultiEncrypt(recipientPubs [][]byte, data []byte, ext string) ([]byte
 		}
 		idx++
 	}
-	if err := writeTerminatorAndFooter(&buf, idx); err != nil {
+	if err := writeAuthFooter(&buf, gcm, dataNonce, idx); err != nil {
 		return nil, err
 	}
 

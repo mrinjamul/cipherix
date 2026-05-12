@@ -98,7 +98,7 @@ func rsaSingleEncrypt(pub *rsa.PublicKey, data []byte, ext string) ([]byte, erro
 		}
 		idx++
 	}
-	if err := writeTerminatorAndFooter(&buf, idx); err != nil {
+	if err := writeAuthFooter(&buf, gcm, masterNonce, idx); err != nil {
 		return nil, err
 	}
 
@@ -254,7 +254,7 @@ func rsaMultiEncrypt(pubs []*rsa.PublicKey, data []byte, ext string) ([]byte, er
 		}
 		idx++
 	}
-	if err := writeTerminatorAndFooter(&buf, idx); err != nil {
+	if err := writeAuthFooter(&buf, gcm, dataNonce, idx); err != nil {
 		return nil, err
 	}
 
@@ -468,7 +468,7 @@ func hybridEncrypt(recips []Recipient, data []byte, ext string) ([]byte, error) 
 		}
 		idx++
 	}
-	if err := writeTerminatorAndFooter(&buf, idx); err != nil {
+	if err := writeAuthFooter(&buf, gcm, dataNonce, idx); err != nil {
 		return nil, err
 	}
 
