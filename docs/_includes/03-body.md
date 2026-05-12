@@ -6,7 +6,7 @@
 - **Keystore**: Store, import, export, and manage X25519 and RSA key pairs; auto-detects the right key on decrypt
 - **Keygen auto-keystore**: `keygen` automatically adds generated keys to the keystore
 - **Directory encryption**: Auto-tars before encrypting, streaming extraction on decrypt
-- **Automatic detection**: Algorithm and format auto-detected on decrypt (v1 and v2 `.chx` files)
+- **Automatic detection**: Algorithm and format auto-detected on decrypt (v1, v2, and v3 `.chx` files)
 - **Streaming**: 64 KiB chunked AEAD - no intermediate files for decryption
 - **Glob expansion**: Encrypt/decrypt multiple files with `*` patterns
 - **Print to stdout**: Decrypt to stdout for piping to other tools
@@ -144,7 +144,13 @@ The first key added automatically becomes the default.
 cipherix encrypt -r <name> <file>
 ```
 
-Decrypt auto-detects the right key from the keystore - no need to specify it:
+If you have a default keystore key and don't pass any flags, encrypt automatically uses it:
+
+```sh
+cipherix encrypt <file>
+```
+
+Decrypt auto-detects the right key from the keystore, no need to specify it:
 
 ```sh
 cipherix decrypt <file.chx>
@@ -152,10 +158,10 @@ cipherix decrypt <file.chx>
 
 Decrypt priority (first match wins):
 
-1. `-p <password>` or `--password-env <var>` - explicit password
-2. `-i <file>` - identity file (Ed25519, RSA, or PEM)
+1. `-i <file>` - identity file (Ed25519, RSA, or PEM)
+2. `-p <password>` or `--password-env <var>` - explicit password
 3. Auto-scan keystore for matching recipient key
-4. Interactive password prompt (last resort)
+4. Interactive password prompt (last resort, file mode only)
 
 ### Directory encryption
 
@@ -195,7 +201,7 @@ cipherix inspect file.chx
 Example output:
 ```
 File:    file.chx
-Format:  1
+Format:  3
 Method:  AES-256-GCM (password)
 KDF:     scrypt
 Type:    file (.txt)

@@ -1,5 +1,5 @@
 title: "cipherix : A file encryption CLI tool"
-description: "AES-256-GCM, XChaCha20-Poly1305, and X25519 public-key encryption with keystore support"
+description: "AES-256-GCM, XChaCha20-Poly1305, X25519 ECDH, and RSA-OAEP encryption with keystore support"
 show_downloads: true
 google_analytics:
 theme: jekyll-theme-cayman

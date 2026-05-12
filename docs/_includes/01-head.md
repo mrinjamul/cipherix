@@ -7,4 +7,4 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://github.com/mrinjamul/cipherix/blob/master/LICENSE)
 [![Github all releases](https://img.shields.io/github/downloads/mrinjamul/cipherix/total.svg)](https://GitHub.com/mrinjamul/cipherix/releases/)
 
-A command-line file encryption tool written in Go. Supports **AES-256-GCM**, **XChaCha20-Poly1305**, and **X25519 public-key encryption** with a unified 64 KiB chunked AEAD format. Includes a built-in keystore for managing encryption keys, shell completion, and a streaming tar library for directory encryption.
+A command-line file encryption tool written in Go. Supports **AES-256-GCM**, **XChaCha20-Poly1305**, **X25519 ECDH**, and **RSA-OAEP** with a unified 64 KiB chunked AEAD format. Includes a built-in keystore for managing encryption keys, shell completion, and a streaming tar library for directory encryption.

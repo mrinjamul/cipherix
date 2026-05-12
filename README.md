@@ -7,7 +7,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://github.com/mrinjamul/cipherix/blob/master/LICENSE)
 [![Github all releases](https://img.shields.io/github/downloads/mrinjamul/cipherix/total.svg)](https://GitHub.com/mrinjamul/cipherix/releases/)
 
-A command-line file encryption tool written in Go. Supports **AES-256-GCM**, **XChaCha20-Poly1305**, **X25519 ECDH**, and **RSA-OAEP** with a unified 64 KiB chunked AEAD format. Includes a built-in keystore for managing encryption keys, multi-recipient encryption (GPG-style), SSH key support, and shell completion.
+A command-line file encryption tool written in Go. Supports **AES-256-GCM**, **XChaCha20-Poly1305**, **X25519 ECDH**, and **RSA-OAEP** with a unified 64 KiB chunked AEAD format. Includes a built-in keystore for managing keys, multi-recipient encryption (GPG-style), SSH key support, and shell completion.
 
 ## Features
 
@@ -17,7 +17,7 @@ A command-line file encryption tool written in Go. Supports **AES-256-GCM**, **X
 - **Keystore**: Generate, import, export, and manage X25519 and RSA key pairs; auto-detects the right key on decrypt
 - **Keygen auto-keystore**: `keygen` automatically adds generated keys to the keystore
 - **Directory encryption**: Auto-tars before encrypting, streaming extraction on decrypt
-- **Automatic detection**: Algorithm and format auto-detected on decrypt (v1 and v2 `.chx` files)
+- **Automatic detection**: Algorithm and format auto-detected on decrypt (v1, v2, and v3 `.chx` files)
 - **Streaming**: 64 KiB chunked AEAD - no intermediate files for decryption
 - **Glob expansion**: Encrypt/decrypt multiple files with `*` patterns
 - **Print to stdout**: Decrypt to stdout for piping to other tools
@@ -138,7 +138,13 @@ Encrypt with a keystore key (using recipient syntax):
 cipherix encrypt -r <name> <file>
 ```
 
-Decrypt auto-detects the right key from the keystore -- no need to specify it:
+If you have a default keystore key and don't pass any flags, encrypt automatically uses it:
+
+```sh
+cipherix encrypt <file>
+```
+
+Decrypt auto-detects the right key from the keystore, no need to specify it:
 
 ```sh
 cipherix decrypt <file.chx>
@@ -146,10 +152,10 @@ cipherix decrypt <file.chx>
 
 Decrypt priority (first match wins):
 
-1. `-p <password>` or `--password-env <var>` - explicit password
-2. `-i <file>` - identity file (Ed25519, RSA, or PEM)
+1. `-i <file>` - identity file (Ed25519, RSA, or PEM)
+2. `-p <password>` or `--password-env <var>` - explicit password
 3. Auto-scan keystore for matching recipient key
-4. Interactive password prompt (last resort)
+4. Interactive password prompt (last resort, file mode only)
 
 ### Directory encryption
 
@@ -189,7 +195,7 @@ cipherix inspect file.chx
 Example output:
 ```
 File:    file.chx
-Format:  1
+Format:  3
 Method:  AES-256-GCM (password)
 KDF:     scrypt
 Type:    file (.txt)
