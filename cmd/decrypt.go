@@ -79,7 +79,8 @@ func decryptRun(cmd *cobra.Command, args []string) {
 	}
 
 	// Parallel per-file processing (skip for interactive or single-file).
-	needsPrompt := passwordOpt == "" && passwordEnv == "" && identityOpt == ""
+	hasDefaultKey, _ := defaultKeyName()
+	needsPrompt := passwordOpt == "" && passwordEnv == "" && identityOpt == "" && hasDefaultKey == ""
 	parallelMode = outputOpt == "" && !stdoutOpt && !needsPrompt && len(files) > 1
 	if outputOpt != "" || stdoutOpt || needsPrompt || len(files) <= 1 {
 		for _, file := range files {
@@ -140,48 +141,10 @@ func decryptFile(encryptedfileName string) {
 		}
 	}
 
-	var data []byte
-	var ext string
-
-	if identityOpt != "" {
-		idRaw, err := utils.ReadFile(identityOpt)
-		if err != nil {
-			utils.ErrorLogger(err)
-			os.Exit(1)
-		}
-		var id crypt.PrivateKey
-		id, err = crypt.UnmarshalIdentity(idRaw)
-		if err != nil {
-			id, err = crypt.ParseSSHIdentity(idRaw)
-			if err != nil {
-				utils.ErrorLogger(fmt.Errorf("failed to parse identity: %w", err))
-				os.Exit(1)
-			}
-		}
-		data, ext, err = crypt.DecryptWithIdentity(id, encryptedData)
-		if err != nil {
-			fmt.Fprintln(os.Stderr, "Error: decryption failed — wrong identity or corrupted data")
-			os.Exit(1)
-		}
-	} else if passwordEnv != "" || passwordOpt != "" {
-		password := resolvePassword()
-		defer utils.ZeroBytes(password)
-		data, ext, err = crypt.Decrypt(password, encryptedData)
-		if err != nil {
-			fmt.Fprintln(os.Stderr, "Error: decryption failed — wrong password")
-			os.Exit(1)
-		}
-	} else {
-		data, ext, err = tryKeystoreKeys(encryptedData)
-		if err != nil {
-			password := resolvePassword()
-			defer utils.ZeroBytes(password)
-			data, ext, err = crypt.Decrypt(password, encryptedData)
-			if err != nil {
-				fmt.Fprintln(os.Stderr, "Error: decryption failed — wrong password")
-				os.Exit(1)
-			}
-		}
+	data, ext, err := decryptWithCascade(encryptedData, true)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "Error: decryption failed — wrong password")
+		os.Exit(1)
 	}
 
 	// print to stdout and return
@@ -230,10 +193,8 @@ func decryptFile(encryptedfileName string) {
 }
 
 func decryptStdin(encryptedData []byte) {
-	var data []byte
-	var err error
-
 	if utils.IsArmored(encryptedData) {
+		var err error
 		encryptedData, err = utils.ArmorDecode(encryptedData)
 		if err != nil {
 			utils.ErrorLogger(err)
@@ -241,39 +202,10 @@ func decryptStdin(encryptedData []byte) {
 		}
 	}
 
-	if identityOpt != "" {
-		idRaw, err := utils.ReadFile(identityOpt)
-		if err != nil {
-			utils.ErrorLogger(err)
-			os.Exit(1)
-		}
-		var id crypt.PrivateKey
-		id, err = crypt.UnmarshalIdentity(idRaw)
-		if err != nil {
-			id, err = crypt.ParseSSHIdentity(idRaw)
-			if err != nil {
-				utils.ErrorLogger(fmt.Errorf("failed to parse identity: %w", err))
-				os.Exit(1)
-			}
-		}
-		data, _, err = crypt.DecryptWithIdentity(id, encryptedData)
-		if err != nil {
-			fmt.Fprintln(os.Stderr, "Error: decryption failed — wrong identity or corrupted data")
-			os.Exit(1)
-		}
-	} else if passwordEnv != "" || passwordOpt != "" {
-		password := resolvePassword()
-		data, _, err = crypt.Decrypt(password, encryptedData)
-		if err != nil {
-			fmt.Fprintln(os.Stderr, "Error: decryption failed — wrong password")
-			os.Exit(1)
-		}
-	} else {
-		data, _, err = tryKeystoreKeys(encryptedData)
-		if err != nil {
-			fmt.Fprintln(os.Stderr, "Error: password required when reading from stdin (use -p, --password-env, or -i)")
-			os.Exit(1)
-		}
+	data, _, err := decryptWithCascade(encryptedData, false)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "Error: password required when reading from stdin (use -p, --password-env, -i, or a keystore key)")
+		os.Exit(1)
 	}
 
 	if outputOpt != "" {
@@ -281,6 +213,64 @@ func decryptStdin(encryptedData []byte) {
 	} else {
 		os.Stdout.Write(data)
 	}
+}
+
+// decryptWithCascade tries decryption via identity, password from flag/env,
+// keystore keys, and finally password prompt — falling through each on failure.
+func decryptWithCascade(encryptedData []byte, allowPrompt bool) (data []byte, ext string, err error) {
+	// Try identity from -i flag
+	if identityOpt != "" {
+		idRaw, readErr := utils.ReadFile(identityOpt)
+		if readErr == nil {
+			var id crypt.PrivateKey
+			id, err = crypt.UnmarshalIdentity(idRaw)
+			if err != nil {
+				id, err = crypt.ParseSSHIdentity(idRaw)
+			}
+			if err == nil {
+				data, ext, err = crypt.DecryptWithIdentity(id, encryptedData)
+				if err == nil {
+					return data, ext, nil
+				}
+			}
+		} else {
+			fmt.Fprintf(os.Stderr, "Warning: could not read identity file: %v\n", readErr)
+		}
+	}
+
+	// Try password from --password-env or -p
+	passwordTried := false
+	if passwordOpt != "" || passwordEnv != "" {
+		password, pwErr := resolvePassword()
+		if pwErr == nil {
+			passwordTried = true
+			data, ext, err = crypt.Decrypt(password, encryptedData)
+			utils.ZeroBytes(password)
+			if err == nil {
+				return data, ext, nil
+			}
+		}
+	}
+
+	// Try keystore keys
+	data, ext, err = tryKeystoreKeys(encryptedData)
+	if err == nil {
+		return data, ext, nil
+	}
+
+	// Try password prompt (only if allowed and no usable password was obtained from flags)
+	if allowPrompt && !passwordTried {
+		password, pwErr := utils.PromptTermPass("Password: ")
+		if pwErr == nil {
+			data, ext, err = crypt.Decrypt(password, encryptedData)
+			utils.ZeroBytes(password)
+			if err == nil {
+				return data, ext, nil
+			}
+		}
+	}
+
+	return nil, "", fmt.Errorf("all decryption methods failed")
 }
 
 // tryKeystoreKeys iterates all keys in the keystore and tries to decrypt.
@@ -326,25 +316,19 @@ func tryKeystoreKeys(encryptedData []byte) ([]byte, string, error) {
 	return nil, "", fmt.Errorf("no keystore key could decrypt the file")
 }
 
-// resolvePassword returns the password from --password-env, -p, or interactive prompt.
-func resolvePassword() []byte {
+// resolvePassword returns the password from --password-env or -p.
+func resolvePassword() ([]byte, error) {
 	if passwordEnv != "" {
 		p := os.Getenv(passwordEnv)
 		if p == "" {
-			fmt.Fprintf(os.Stderr, "Error: environment variable %s is not set or is empty\n", passwordEnv)
-			os.Exit(1)
+			return nil, fmt.Errorf("environment variable %s is not set or is empty", passwordEnv)
 		}
-		return []byte(p)
+		return []byte(p), nil
 	}
 	if passwordOpt != "" {
-		return []byte(passwordOpt)
+		return []byte(passwordOpt), nil
 	}
-	p, err := utils.PromptTermPass("Password: ")
-	if err != nil {
-		utils.ErrorLogger(err)
-		os.Exit(1)
-	}
-	return p
+	return nil, fmt.Errorf("resolvePassword called without --password-env or -p")
 }
 
 var (

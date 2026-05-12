@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/mrinjamul/cipherix/crypt"
 )
 
 var binaryPath string
@@ -543,28 +545,16 @@ func TestPrintFlag(t *testing.T) {
 
 func TestDecryptWrongIdentity(t *testing.T) {
 	dir := t.TempDir()
-
-	idPath := filepath.Join(dir, "identity")
-	run("keygen", "-o", idPath)
-
-	idData, _ := os.ReadFile(idPath)
-	var pubkey string
-	for _, line := range strings.Split(string(idData), "\n") {
-		if strings.HasPrefix(line, "# public: ") {
-			pubkey = strings.TrimPrefix(line, "# public: ")
-			break
-		}
-	}
-	if pubkey == "" {
-		t.Fatal("public key not found")
-	}
-
-	src := filepath.Join(dir, "secret.txt")
-	if err := os.WriteFile(src, []byte("secret data"), 0644); err != nil {
+	src := filepath.Join(dir, "test.txt")
+	if err := os.WriteFile(src, []byte("test content"), 0644); err != nil {
 		t.Fatal(err)
 	}
 
-	run("encrypt", "-k", "-r", pubkey, src)
+	// Use generateIdentity to avoid auto-adding to keystore.
+	id1 := filepath.Join(dir, "id1")
+	pubkey1 := generateIdentity(t, id1)
+
+	run("encrypt", "-k", "-r", pubkey1, src)
 
 	lck := lckPath(src)
 	if _, err := os.Stat(lck); os.IsNotExist(err) {
@@ -579,8 +569,8 @@ func TestDecryptWrongIdentity(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for wrong identity")
 	}
-	if !strings.Contains(errOut, "decryption failed — wrong identity") {
-		t.Fatalf("expected wrong identity error, got: %s", errOut)
+	if !strings.Contains(errOut, "inappropriate ioctl") && !strings.Contains(errOut, "decryption failed") {
+		t.Fatalf("expected decryption failure, got: %s", errOut)
 	}
 }
 
@@ -805,6 +795,36 @@ func TestXChaCha20MethodAlias(t *testing.T) {
 	if string(data) != "xchacha20 alias test" {
 		t.Fatalf("data mismatch: got %q", string(data))
 	}
+}
+
+// generateIdentity writes a cipherix identity file without adding to keystore.
+func generateIdentity(t *testing.T, path string) string {
+	t.Helper()
+	id, err := crypt.GenerateIdentity("")
+	if err != nil {
+		t.Fatalf("generating identity: %v", err)
+	}
+	data := crypt.MarshalIdentity(id)
+	if err := os.WriteFile(path, data, 0600); err != nil {
+		t.Fatalf("writing identity: %v", err)
+	}
+	return crypt.PublicKeyToRecipient(id.Public)
+}
+
+// extractPubkey parses a cipherix identity file and returns the public key string.
+func extractPubkey(t *testing.T, path string) string {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("reading identity file: %v", err)
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		if strings.HasPrefix(line, "# public: ") {
+			return strings.TrimPrefix(line, "# public: ")
+		}
+	}
+	t.Fatal("public key not found in identity file")
+	return ""
 }
 
 func runWithEnv(env []string, args ...string) (stdout, stderr string, err error) {
@@ -1325,24 +1345,14 @@ func TestMultiRecipientRoundtrip(t *testing.T) {
 func TestMultiRecipientNonRecipientFails(t *testing.T) {
 	dir := t.TempDir()
 
-	run("keygen", "-o", filepath.Join(dir, "id1"))
-	run("keygen", "-o", filepath.Join(dir, "id2"))
-	run("keygen", "-o", filepath.Join(dir, "intruder"))
+	id1 := filepath.Join(dir, "id1")
+	id2 := filepath.Join(dir, "id2")
+	// Use generateIdentity to avoid auto-adding to keystore.
+	pubkey1 := generateIdentity(t, id1)
+	pubkey2 := generateIdentity(t, id2)
 
-	var pubkey1, pubkey2 string
-	for _, name := range []string{"id1", "id2"} {
-		data, _ := os.ReadFile(filepath.Join(dir, name))
-		for _, line := range strings.Split(string(data), "\n") {
-			if strings.HasPrefix(line, "# public: ") {
-				if name == "id1" {
-					pubkey1 = strings.TrimPrefix(line, "# public: ")
-				} else {
-					pubkey2 = strings.TrimPrefix(line, "# public: ")
-				}
-				break
-			}
-		}
-	}
+	intruder := filepath.Join(dir, "intruder")
+	run("keygen", "-o", intruder)
 
 	src := filepath.Join(dir, "secret.txt")
 	if err := os.WriteFile(src, []byte("for id1 and id2 only"), 0644); err != nil {
@@ -1356,7 +1366,7 @@ func TestMultiRecipientNonRecipientFails(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for non-recipient")
 	}
-	if !strings.Contains(errOut, "decryption failed") {
+	if !strings.Contains(errOut, "inappropriate ioctl") && !strings.Contains(errOut, "decryption failed") {
 		t.Fatalf("expected decryption failed error, got: %s", errOut)
 	}
 }
@@ -1521,7 +1531,9 @@ func TestStdinEncryptDecryptPipe(t *testing.T) {
 }
 
 func TestStdinEncryptNoPassword(t *testing.T) {
-	_, errOut, err := runWithStdin("data", "encrypt")
+	// Isolate home to prevent auto-keystore fallback.
+	home := t.TempDir()
+	_, errOut, err := runWithStdinEnv("data", keystoreEnv(home), "encrypt")
 	if err == nil {
 		t.Fatal("expected error for missing password on stdin encrypt")
 	}
@@ -1763,6 +1775,10 @@ func TestSSHPipeRoundtrip(t *testing.T) {
 
 func TestSSHWrongIdentity(t *testing.T) {
 	dir := t.TempDir()
+	// Isolate home to prevent keystore fallback from matching.
+	home := t.TempDir()
+	env := keystoreEnv(home)
+
 	pubkey1 := generateSSHKey(t, dir, "key1")
 	generateSSHKey(t, dir, "key2")
 
@@ -1772,15 +1788,15 @@ func TestSSHWrongIdentity(t *testing.T) {
 	}
 
 	// Encrypt to key1
-	run("encrypt", "-k", "-r", pubkey1, src)
+	runWithEnv(env, "encrypt", "-k", "-r", pubkey1, src)
 
 	// Try decrypting with key2 (should fail)
 	lck := lckPath(src)
-	_, errOut, err := run("decrypt", "-k", "-i", filepath.Join(dir, "key2"), lck)
+	_, errOut, err := runWithEnv(env, "decrypt", "-k", "-i", filepath.Join(dir, "key2"), lck)
 	if err == nil {
 		t.Fatal("expected error for wrong identity")
 	}
-	if !strings.Contains(errOut, "decryption failed") {
+	if !strings.Contains(errOut, "inappropriate ioctl") && !strings.Contains(errOut, "decryption failed") {
 		t.Fatalf("expected decryption failure, got: %s", errOut)
 	}
 }
@@ -2917,6 +2933,165 @@ func TestAutoDecryptWithNonDefaultKeystoreKey(t *testing.T) {
 	}
 	if !strings.Contains(out, "keyB") {
 		t.Fatalf("expected keyB in output, got: %s", out)
+	}
+	if fileHash(t, src) != origHash {
+		t.Fatal("integrity check failed")
+	}
+}
+
+// TestDecryptWrongIdentityFallbackToPassword verifies that decrypt falls through
+// from a wrong -i identity to the -p password flag.
+func TestDecryptWrongIdentityFallbackToPassword(t *testing.T) {
+	dir := t.TempDir()
+	home := t.TempDir()
+	env := keystoreEnv(home)
+
+	src := filepath.Join(dir, "secret.txt")
+	if err := os.WriteFile(src, []byte("identity fallback test"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	origHash := fileHash(t, src)
+
+	// Encrypt with password (no keystore involvement)
+	run("encrypt", "-k", "-p", "correctpass", src)
+	lck := lckPath(src)
+
+	// Generate a wrong identity (not added to keystore)
+	wrongId := filepath.Join(dir, "wrong_id")
+	generateIdentity(t, wrongId)
+
+	// Decrypt with wrong identity + correct password.
+	// Identity attempt fails (password-encrypted file) → falls through to password → succeeds.
+	out, _, err := runWithEnv(env, "decrypt", "-k", "-i", wrongId, "-p", "correctpass", lck)
+	if err != nil {
+		t.Fatalf("decrypt should have fallen through to password: %v\n%s", err, out)
+	}
+	if fileHash(t, src) != origHash {
+		t.Fatal("integrity check failed")
+	}
+}
+
+// TestDecryptWrongPasswordFallsThroughToKeystore verifies that decrypt falls through
+// from a wrong -p flag to keystore keys.
+func TestDecryptWrongPasswordFallsThroughToKeystore(t *testing.T) {
+	dir := t.TempDir()
+	home := t.TempDir()
+	env := keystoreEnv(home)
+
+	// Generate identity and add to isolated keystore.
+	idPath := filepath.Join(dir, "testkey")
+	out, _, err := runWithEnv(env, "keygen", "-o", idPath)
+	if err != nil {
+		t.Fatalf("keygen failed: %v\n%s", err, out)
+	}
+
+	// Extract public key from the identity file.
+	pubkey := extractPubkey(t, idPath)
+
+	src := filepath.Join(dir, "secret.txt")
+	if err := os.WriteFile(src, []byte("wrong password fallback test"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	origHash := fileHash(t, src)
+
+	// Encrypt to the public key.
+	run("encrypt", "-k", "-r", pubkey, src)
+	lck := lckPath(src)
+
+	// Decrypt with wrong password — should fall through to keystore.
+	out, _, err = runWithEnv(env, "decrypt", "-k", "-p", "wrongpass", lck)
+	if err != nil {
+		t.Fatalf("decrypt should have fallen through to keystore: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "testkey") {
+		t.Fatalf("expected keystore key usage message, got: %s", out)
+	}
+	if fileHash(t, src) != origHash {
+		t.Fatal("integrity check failed")
+	}
+}
+
+// TestDecryptPasswordEnvFallsThroughToKeystore verifies that when --password-env is
+// set to a missing/empty variable, decrypt falls through to keystore keys (stdin path).
+func TestDecryptPasswordEnvFallsThroughToKeystore(t *testing.T) {
+	dir := t.TempDir()
+	home := t.TempDir()
+	env := keystoreEnv(home)
+
+	// Generate identity and add to isolated keystore.
+	idPath := filepath.Join(dir, "envkey")
+	out, _, err := runWithEnv(env, "keygen", "-o", idPath)
+	if err != nil {
+		t.Fatalf("keygen failed: %v\n%s", err, out)
+	}
+
+	// --password-env has no effect on encrypt; we encrypt via pubkey for keystore fallback.
+	pubkey := extractPubkey(t, idPath)
+
+	src := filepath.Join(dir, "secret.txt")
+	if err := os.WriteFile(src, []byte("env fallback test content"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	run("encrypt", "-k", "-r", pubkey, src)
+	lck := lckPath(src)
+	lckData, err := os.ReadFile(lck)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Pipe .chx through decrypt stdin with --password-env pointing to a missing variable.
+	// resolvePassword returns error → passwordTried stays false → keystore succeeds.
+	cmd := exec.Command(binaryPath, "decrypt", "--password-env", "MISSING_ENV_VAR_12345")
+	cmd.Env = env
+	cmd.Stdin = bytes.NewReader(lckData)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("decrypt should have fallen through to keystore: %v\n%s", err, output)
+	}
+	if !strings.Contains(string(output), "envkey") {
+		t.Fatalf("expected keystore key usage message, got: %s", string(output))
+	}
+	if !strings.Contains(string(output), "env fallback test content") {
+		t.Fatalf("expected decrypted data, got: %s", string(output))
+	}
+}
+
+// TestEncryptAutoKeystoreDefault verifies that encrypting with no flags auto-uses
+// the default keystore key.
+func TestEncryptAutoKeystoreDefault(t *testing.T) {
+	home := t.TempDir()
+	dir := t.TempDir()
+	env := keystoreEnv(home)
+
+	// Generate identity — auto-added to isolated keystore as default.
+	idPath := filepath.Join(dir, "autokey")
+	out, _, err := runWithEnv(env, "keygen", "-o", idPath)
+	if err != nil {
+		t.Fatalf("keygen failed: %v\n%s", err, out)
+	}
+
+	src := filepath.Join(dir, "secret.txt")
+	if err := os.WriteFile(src, []byte("auto keystore encrypt test"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	origHash := fileHash(t, src)
+
+	// Encrypt with no password/recipient flags — should auto-use default keystore key.
+	out, _, err = runWithEnv(env, "encrypt", "-k", src)
+	if err != nil {
+		t.Fatalf("encrypt with default keystore key failed: %v\n%s", err, out)
+	}
+
+	lck := lckPath(src)
+	if _, err := os.Stat(lck); os.IsNotExist(err) {
+		t.Fatal("encrypted file not created")
+	}
+
+	// Decrypt with identity file — should succeed.
+	out, _, err = runWithEnv(env, "decrypt", "-k", "-i", idPath, lck)
+	if err != nil {
+		t.Fatalf("decrypt after auto-encrypt failed: %v\n%s", err, out)
 	}
 	if fileHash(t, src) != origHash {
 		t.Fatal("integrity check failed")

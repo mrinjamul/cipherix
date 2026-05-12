@@ -99,6 +99,28 @@ func lookupRecipient(name string) (crypt.Recipient, error) {
 	return crypt.EntryToRecipient(entry)
 }
 
+// lookupDefaultKeystoreRecipient returns a Recipient from the default keystore key.
+// Returns (nil, nil) when no default key exists (not an error).
+func lookupDefaultKeystoreRecipient() (crypt.Recipient, error) {
+	dflt, err := defaultKeyName()
+	if err != nil || dflt == "" {
+		return nil, nil
+	}
+	p, err := keyPath(dflt)
+	if err != nil {
+		return nil, nil
+	}
+	data, err := os.ReadFile(p)
+	if err != nil {
+		return nil, nil
+	}
+	entry, err := crypt.UnmarshalKeyStoreEntry(data)
+	if err != nil {
+		return nil, nil
+	}
+	return crypt.EntryToRecipient(entry)
+}
+
 // encryptToRecipients resolves all -r flags (keystore lookup → file → inline)
 // and encrypts data.
 func encryptToRecipients(data []byte, extension string) ([]byte, error) {
@@ -174,7 +196,8 @@ func encryptRun(cmd *cobra.Command, args []string) {
 	}
 
 	// Parallel per-file processing (skip for interactive or single-file).
-	needsPrompt := passwordOpt == "" && passwordEnv == "" && len(recipientOpt) == 0
+	hasDefaultKey, _ := defaultKeyName()
+	needsPrompt := passwordOpt == "" && passwordEnv == "" && len(recipientOpt) == 0 && hasDefaultKey == ""
 	parallelMode = outputOpt == "" && !needsPrompt && len(files) > 1
 	if outputOpt != "" || needsPrompt || len(files) <= 1 {
 		for _, fileName := range files {
@@ -234,9 +257,14 @@ func encryptFile(fileName string) {
 	} else if passwordOpt != "" {
 		password = []byte(passwordOpt)
 	}
+	var keystoreRecipient crypt.Recipient
 	usePassword := len(password) > 0 || len(recipientOpt) == 0
 
-	if usePassword && len(password) == 0 {
+	if usePassword && len(password) == 0 && len(recipientOpt) == 0 {
+		keystoreRecipient, _ = lookupDefaultKeystoreRecipient()
+	}
+
+	if usePassword && len(password) == 0 && keystoreRecipient == nil {
 		password, err = utils.PromptTermPass("Password: ")
 		if err != nil {
 			utils.ErrorLogger(err)
@@ -311,6 +339,12 @@ func encryptFile(fileName string) {
 			utils.ErrorLogger(err)
 			os.Exit(1)
 		}
+	} else if keystoreRecipient != nil {
+		encryptdata, err = crypt.EncryptToPublicKey(keystoreRecipient, data, extension)
+		if err != nil {
+			utils.ErrorLogger(err)
+			os.Exit(1)
+		}
 	} else {
 		encryptdata, err = crypt.Encrypt(password, data, methodOpt, extension)
 		if err != nil {
@@ -363,8 +397,13 @@ func encryptStdin(data []byte) {
 	}
 	usePassword := len(password) > 0 || len(recipientOpt) == 0
 
-	if usePassword && len(password) == 0 {
-		fmt.Fprintln(os.Stderr, "Error: password required when reading from stdin (use -p or --password-env)")
+	var keystoreRecipient crypt.Recipient
+	if usePassword && len(password) == 0 && len(recipientOpt) == 0 {
+		keystoreRecipient, _ = lookupDefaultKeystoreRecipient()
+	}
+
+	if usePassword && len(password) == 0 && keystoreRecipient == nil {
+		fmt.Fprintln(os.Stderr, "Error: password required when reading from stdin (use -p, --password-env, or a keystore default key)")
 		os.Exit(1)
 	}
 
@@ -374,6 +413,8 @@ func encryptStdin(data []byte) {
 	var err error
 	if len(recipientOpt) > 0 {
 		encryptdata, err = encryptToRecipients(data, extension)
+	} else if keystoreRecipient != nil {
+		encryptdata, err = crypt.EncryptToPublicKey(keystoreRecipient, data, extension)
 	} else {
 		encryptdata, err = crypt.Encrypt(password, data, methodOpt, extension)
 	}
