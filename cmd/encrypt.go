@@ -216,12 +216,6 @@ func encryptFile(fileName string) {
 	var tarName string
 
 	filename, extension := utils.GetFileNameExt(origName)
-	if extension == "" {
-		extension = "ger"
-	}
-	if len(extension) == 2 {
-		extension = extension + "2"
-	}
 	encryptFileName := filename + AppExtension
 	if outputOpt != "" {
 		encryptFileName = outputOpt

@@ -14,13 +14,17 @@ import (
 var binaryPath string
 
 // lckPath returns the expected .chx path for a source file.
-// The encrypt command strips the original extension and appends .chx.
+// Must match cmd.encryptFile's output-path derivation.
 func lckPath(src string) string {
 	ext := filepath.Ext(src)
-	if ext == "" {
+	if ext == "" || ext == src {
 		return src + ".chx"
 	}
-	return src[:len(src)-len(ext)] + ".chx"
+	base := src[:len(src)-len(ext)]
+	if base == "" {
+		return src + ".chx"
+	}
+	return base + ".chx"
 }
 
 func TestMain(m *testing.M) {
@@ -1104,6 +1108,151 @@ func TestEncryptFileNoExtension(t *testing.T) {
 	}
 	data, _ := os.ReadFile(src)
 	if string(data) != "no extension" {
+		t.Fatalf("data mismatch: got %q", string(data))
+	}
+}
+
+func TestEncryptDecrypt4CharExtension(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "page.html")
+	if err := os.WriteFile(src, []byte("4-char extension"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	origHash := fileHash(t, src)
+
+	out, _, err := run("encrypt", "-k", "-p", "pass", src)
+	if err != nil {
+		t.Fatalf("encrypt failed: %v\n%s", err, out)
+	}
+	lck := lckPath(src)
+	if _, err := os.Stat(lck); os.IsNotExist(err) {
+		t.Fatal("encrypted file not created")
+	}
+	out, _, err = run("decrypt", "-k", "-p", "pass", lck)
+	if err != nil {
+		t.Fatalf("decrypt failed: %v\n%s", err, out)
+	}
+	if fileHash(t, src) != origHash {
+		t.Fatalf("integrity check failed for 4-char extension round-trip")
+	}
+	data, _ := os.ReadFile(src)
+	if string(data) != "4-char extension" {
+		t.Fatalf("data mismatch: got %q", string(data))
+	}
+}
+
+func TestEncryptDecryptMultiDotExtension(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "archive.tar.gz")
+	if err := os.WriteFile(src, []byte("multi-dot extension"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	origHash := fileHash(t, src)
+
+	out, _, err := run("encrypt", "-k", "-p", "pass", src)
+	if err != nil {
+		t.Fatalf("encrypt failed: %v\n%s", err, out)
+	}
+	lck := lckPath(src)
+	if _, err := os.Stat(lck); os.IsNotExist(err) {
+		t.Fatal("encrypted file not created")
+	}
+	out, _, err = run("decrypt", "-k", "-p", "pass", lck)
+	if err != nil {
+		t.Fatalf("decrypt failed: %v\n%s", err, out)
+	}
+	if fileHash(t, src) != origHash {
+		t.Fatalf("integrity check failed for multi-dot extension round-trip")
+	}
+	data, _ := os.ReadFile(src)
+	if string(data) != "multi-dot extension" {
+		t.Fatalf("data mismatch: got %q", string(data))
+	}
+}
+
+func TestEncryptDecryptTwoCharExtension(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "readme.md")
+	if err := os.WriteFile(src, []byte("2-char extension"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	origHash := fileHash(t, src)
+
+	out, _, err := run("encrypt", "-k", "-p", "pass", src)
+	if err != nil {
+		t.Fatalf("encrypt failed: %v\n%s", err, out)
+	}
+	lck := lckPath(src)
+	if _, err := os.Stat(lck); os.IsNotExist(err) {
+		t.Fatal("encrypted file not created")
+	}
+	out, _, err = run("decrypt", "-k", "-p", "pass", lck)
+	if err != nil {
+		t.Fatalf("decrypt failed: %v\n%s", err, out)
+	}
+	if fileHash(t, src) != origHash {
+		t.Fatalf("integrity check failed for 2-char extension round-trip")
+	}
+	data, _ := os.ReadFile(src)
+	if string(data) != "2-char extension" {
+		t.Fatalf("data mismatch: got %q", string(data))
+	}
+}
+
+func TestEncryptDecryptHiddenFile(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, ".gitignore")
+	if err := os.WriteFile(src, []byte("hidden file"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	origHash := fileHash(t, src)
+
+	out, _, err := run("encrypt", "-k", "-p", "pass", src)
+	if err != nil {
+		t.Fatalf("encrypt failed: %v\n%s", err, out)
+	}
+	lck := lckPath(src)
+	if _, err := os.Stat(lck); os.IsNotExist(err) {
+		t.Fatal("encrypted file not created")
+	}
+	out, _, err = run("decrypt", "-k", "-p", "pass", lck)
+	if err != nil {
+		t.Fatalf("decrypt failed: %v\n%s", err, out)
+	}
+	if fileHash(t, src) != origHash {
+		t.Fatalf("integrity check failed for hidden-file round-trip")
+	}
+	data, _ := os.ReadFile(src)
+	if string(data) != "hidden file" {
+		t.Fatalf("data mismatch: got %q", string(data))
+	}
+}
+
+func TestEncryptDecryptHiddenFileWithExtension(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, ".config.json")
+	if err := os.WriteFile(src, []byte("hidden with ext"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	origHash := fileHash(t, src)
+
+	out, _, err := run("encrypt", "-k", "-p", "pass", src)
+	if err != nil {
+		t.Fatalf("encrypt failed: %v\n%s", err, out)
+	}
+	lck := lckPath(src)
+	if _, err := os.Stat(lck); os.IsNotExist(err) {
+		t.Fatal("encrypted file not created")
+	}
+	out, _, err = run("decrypt", "-k", "-p", "pass", lck)
+	if err != nil {
+		t.Fatalf("decrypt failed: %v\n%s", err, out)
+	}
+	if fileHash(t, src) != origHash {
+		t.Fatalf("integrity check failed for hidden-with-ext round-trip")
+	}
+	data, _ := os.ReadFile(src)
+	if string(data) != "hidden with ext" {
 		t.Fatalf("data mismatch: got %q", string(data))
 	}
 }

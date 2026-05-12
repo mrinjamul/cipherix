@@ -27,6 +27,8 @@ func TestGetFileNameExt(t *testing.T) {
 		{"File without Extension", "test", "test", ""},
 		{"File with 2 latter Extension", "test.md", "test", "md"},
 		{"File name smaller than 4", "xyz", "xyz", ""},
+		{"4-char extension", "file.html", "file", "html"},
+		{"multi-dot", "archive.tar.gz", "archive.tar", "gz"},
 	}
 
 	for _, testcase := range testcases {
@@ -159,7 +161,7 @@ func TestGetFileNameExtMultiDot(t *testing.T) {
 		{"tar.gz", "archive.tar.gz", "archive.tar", "gz"},
 		{"a.b.c", "a.b.c.txt", "a.b.c", "txt"},
 		{"hidden", ".gitignore", ".gitignore", ""},
-		{"hidden with ext", ".config.json", ".config.json", ""}, // custom GetFileNameExt only handles 2/3-char ext
+		{"hidden with ext", ".config.json", ".config", "json"},
 		{"no ext", "Makefile", "Makefile", ""},
 		{"just dot", ".", ".", ""},
 	}

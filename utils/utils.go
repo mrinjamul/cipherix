@@ -34,19 +34,17 @@ func PromptTermPass(promptText string) ([]byte, error) {
 	return bytePassword, nil
 }
 
-// GetFileNameExt simplify filename for use (Note: only 3 char ext)
+// GetFileNameExt splits path into base name and extension (without dot).
 func GetFileNameExt(file string) (filename, extension string) {
-	if len(file) > 4 && file[len(file)-4:len(file)-3] == "." {
-		filename = file[0 : len(file)-4]
-		extension = file[len(file)-3:]
-	} else if len(file) > 3 && file[len(file)-3:len(file)-2] == "." {
-		filename = file[0 : len(file)-3]
-		extension = file[len(file)-2:]
-	} else {
-		filename = file
-		extension = ""
+	ext := filepath.Ext(file)
+	if ext == "" || ext == file {
+		return file, ""
 	}
-	return filename, extension
+	base := file[:len(file)-len(ext)]
+	if base == "" {
+		return file, ""
+	}
+	return base, ext[1:]
 }
 
 // ReadFile returns file data in bytes

@@ -192,7 +192,10 @@ func decryptFile(encryptedfileName string) {
 
 	outPath := outputOpt
 	if outPath == "" {
-		if ext != "" && ext != "ger" {
+		if ext == "ger" {
+			ext = ""
+		}
+		if ext != "" {
 			outPath = filename + "." + ext
 		} else {
 			outPath = filename
