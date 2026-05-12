@@ -39,7 +39,7 @@ func rsaSingleEncrypt(pub *rsa.PublicKey, data []byte, ext string) ([]byte, erro
 		return nil, fmt.Errorf("rsa oaep encrypt: %w", err)
 	}
 
-	h := &fileHeader{algo: algoPubKeyRSA, kdf: kdfRSAOAEP, ext: ext}
+	h := &fileHeader{ver: headerVersion, algo: algoPubKeyRSA, kdf: kdfRSAOAEP, ext: ext}
 	header := h.marshal()
 
 	salt := make([]byte, saltLen)
@@ -70,13 +70,30 @@ func rsaSingleEncrypt(pub *rsa.PublicKey, data []byte, ext string) ([]byte, erro
 	buf.Write(salt)
 	buf.Write(masterNonce)
 
+	meta := make([]byte, 1+len(ext))
+	meta[0] = byte(len(ext))
+	copy(meta[1:], ext)
+
 	var idx uint32
 	for i := 0; i < len(data); i += chunkSize {
 		end := i + chunkSize
 		if end > len(data) {
 			end = len(data)
 		}
-		if err := writeChunk(&buf, gcm, masterNonce, idx, data[i:end]); err != nil {
+		chunk := data[i:end]
+		if i == 0 {
+			combined := make([]byte, len(meta)+len(chunk))
+			copy(combined, meta)
+			copy(combined[len(meta):], chunk)
+			chunk = combined
+		}
+		if err := writeChunk(&buf, gcm, masterNonce, idx, chunk); err != nil {
+			return nil, err
+		}
+		idx++
+	}
+	if len(data) == 0 {
+		if err := writeChunk(&buf, gcm, masterNonce, idx, meta); err != nil {
 			return nil, err
 		}
 		idx++
@@ -133,19 +150,19 @@ func rsaSingleDecrypt(priv *rsa.PrivateKey, data []byte) ([]byte, string, error)
 	var plaintext bytes.Buffer
 	r := bytes.NewReader(chunkData)
 	var idx uint32
-	for {
-		pt, err := readChunk(r, gcm, masterNonce, idx)
+	isV3 := hdr.ver >= 3
+	var authExt string
+	if isV3 {
+		authExt, err = readMetadataChunk(r, gcm, masterNonce, &idx, &plaintext)
 		if err != nil {
-			return nil, "", ErrWrongPassword
+			return nil, "", err
 		}
-		if pt == nil {
-			break
-		}
-		plaintext.Write(pt)
-		idx++
 	}
-	if err := readTerminatorAndFooter(r, idx); err != nil {
-		return nil, "", err
+	if err := decryptChunks(r, gcm, masterNonce, idx, &plaintext); err != nil {
+		return nil, "", ErrWrongPassword
+	}
+	if isV3 {
+		return plaintext.Bytes(), authExt, nil
 	}
 	return plaintext.Bytes(), hdr.ext, nil
 }
@@ -200,7 +217,7 @@ func rsaMultiEncrypt(pubs []*rsa.PublicKey, data []byte, ext string) ([]byte, er
 		return nil, err
 	}
 
-	h := &fileHeader{algo: algoPubKeyRSAMulti, kdf: kdfRSAOAEP, ext: ext}
+	h := &fileHeader{ver: headerVersion, algo: algoPubKeyRSAMulti, kdf: kdfRSAOAEP, ext: ext}
 	header := h.marshal()
 
 	var buf bytes.Buffer
@@ -209,13 +226,30 @@ func rsaMultiEncrypt(pubs []*rsa.PublicKey, data []byte, ext string) ([]byte, er
 	buf.Write(dataNonce)
 	buf.Write(entriesBuf.Bytes())
 
+	meta := make([]byte, 1+len(ext))
+	meta[0] = byte(len(ext))
+	copy(meta[1:], ext)
+
 	var idx uint32
 	for i := 0; i < len(data); i += chunkSize {
 		end := i + chunkSize
 		if end > len(data) {
 			end = len(data)
 		}
-		if err := writeChunk(&buf, gcm, dataNonce, idx, data[i:end]); err != nil {
+		chunk := data[i:end]
+		if i == 0 {
+			combined := make([]byte, len(meta)+len(chunk))
+			copy(combined, meta)
+			copy(combined[len(meta):], chunk)
+			chunk = combined
+		}
+		if err := writeChunk(&buf, gcm, dataNonce, idx, chunk); err != nil {
+			return nil, err
+		}
+		idx++
+	}
+	if len(data) == 0 {
+		if err := writeChunk(&buf, gcm, dataNonce, idx, meta); err != nil {
 			return nil, err
 		}
 		idx++
@@ -295,19 +329,19 @@ func rsaMultiDecrypt(priv *rsa.PrivateKey, data []byte) ([]byte, string, error) 
 	var plaintext bytes.Buffer
 	r := bytes.NewReader(chunkData)
 	var idx uint32
-	for {
-		pt, err := readChunk(r, gcm, dataNonce, idx)
+	isV3 := hdr.ver >= 3
+	var authExt string
+	if isV3 {
+		authExt, err = readMetadataChunk(r, gcm, dataNonce, &idx, &plaintext)
 		if err != nil {
-			return nil, "", ErrWrongPassword
+			return nil, "", err
 		}
-		if pt == nil {
-			break
-		}
-		plaintext.Write(pt)
-		idx++
 	}
-	if err := readTerminatorAndFooter(r, idx); err != nil {
-		return nil, "", err
+	if err := decryptChunks(r, gcm, dataNonce, idx, &plaintext); err != nil {
+		return nil, "", ErrWrongPassword
+	}
+	if isV3 {
+		return plaintext.Bytes(), authExt, nil
 	}
 	return plaintext.Bytes(), hdr.ext, nil
 }
@@ -396,7 +430,7 @@ func hybridEncrypt(recips []Recipient, data []byte, ext string) ([]byte, error) 
 		return nil, err
 	}
 
-	h := &fileHeader{algo: algoPubKeyHybrid, kdf: kdfRSAOAEP, ext: ext}
+	h := &fileHeader{ver: headerVersion, algo: algoPubKeyHybrid, kdf: kdfRSAOAEP, ext: ext}
 	header := h.marshal()
 
 	var buf bytes.Buffer
@@ -406,13 +440,30 @@ func hybridEncrypt(recips []Recipient, data []byte, ext string) ([]byte, error) 
 	buf.Write(dataNonce)
 	buf.Write(entriesBuf.Bytes())
 
+	meta := make([]byte, 1+len(ext))
+	meta[0] = byte(len(ext))
+	copy(meta[1:], ext)
+
 	var idx uint32
 	for i := 0; i < len(data); i += chunkSize {
 		end := i + chunkSize
 		if end > len(data) {
 			end = len(data)
 		}
-		if err := writeChunk(&buf, gcm, dataNonce, idx, data[i:end]); err != nil {
+		chunk := data[i:end]
+		if i == 0 {
+			combined := make([]byte, len(meta)+len(chunk))
+			copy(combined, meta)
+			copy(combined[len(meta):], chunk)
+			chunk = combined
+		}
+		if err := writeChunk(&buf, gcm, dataNonce, idx, chunk); err != nil {
+			return nil, err
+		}
+		idx++
+	}
+	if len(data) == 0 {
+		if err := writeChunk(&buf, gcm, dataNonce, idx, meta); err != nil {
 			return nil, err
 		}
 		idx++
@@ -570,19 +621,19 @@ func hybridDecrypt(priv PrivateKey, data []byte) ([]byte, string, error) {
 	var plaintext bytes.Buffer
 	r := bytes.NewReader(chunkData)
 	var idx uint32
-	for {
-		pt, err := readChunk(r, gcm, dataNonce, idx)
+	isV3 := hdr.ver >= 3
+	var authExt string
+	if isV3 {
+		authExt, err = readMetadataChunk(r, gcm, dataNonce, &idx, &plaintext)
 		if err != nil {
-			return nil, "", ErrWrongPassword
+			return nil, "", err
 		}
-		if pt == nil {
-			break
-		}
-		plaintext.Write(pt)
-		idx++
 	}
-	if err := readTerminatorAndFooter(r, idx); err != nil {
-		return nil, "", err
+	if err := decryptChunks(r, gcm, dataNonce, idx, &plaintext); err != nil {
+		return nil, "", ErrWrongPassword
+	}
+	if isV3 {
+		return plaintext.Bytes(), authExt, nil
 	}
 	return plaintext.Bytes(), hdr.ext, nil
 }

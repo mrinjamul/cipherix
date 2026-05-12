@@ -28,7 +28,8 @@ const (
 	magicLen      = 4
 	oldMagic      = "goenc"
 	oldMagicLen   = 5
-	headerVersion = 1
+	headerVersionV1 = 1
+	headerVersion   = 3
 
 	headerBaseLen = magicLen + 4 // magic + version + algo + kdf + extLen
 
@@ -84,8 +85,9 @@ var (
 	KeyThreads = uint8(4)
 )
 
-// fileHeader is the v2 binary header.
+// fileHeader is the v2/v3 binary header.
 type fileHeader struct {
+	ver  byte
 	algo byte
 	kdf  byte
 	ext  string
@@ -117,7 +119,11 @@ func parseHeader(data []byte) (*fileHeader, int, error) {
 		return nil, 0, ErrUnknownFormat
 	}
 	hdrLen := ml + 4
-	if len(data) < hdrLen || data[ml] != headerVersion {
+	if len(data) < hdrLen {
+		return nil, 0, ErrUnknownFormat
+	}
+	ver := data[ml]
+	if ver != headerVersionV1 && ver != headerVersion {
 		return nil, 0, ErrUnknownFormat
 	}
 	extLen := int(data[ml+3])
@@ -125,6 +131,7 @@ func parseHeader(data []byte) (*fileHeader, int, error) {
 		return nil, 0, ErrCorruptedData
 	}
 	h := &fileHeader{
+		ver:  ver,
 		algo: data[ml+1],
 		kdf:  data[ml+2],
 		ext:  string(data[hdrLen : hdrLen+extLen]),
@@ -247,6 +254,47 @@ func readTerminatorAndFooter(r io.Reader, numChunks uint32) error {
 	return nil
 }
 
+// readMetadataChunk decrypts and extracts the authenticated extension from
+// the first chunk (v3+ format). For v1 files, returns empty string.
+// On success, idx is set to 1 (past the metadata chunk) and buf receives
+// any embedded data bytes that follow the extension.
+func readMetadataChunk(r io.Reader, aead cipher.AEAD, masterNonce []byte, idx *uint32, buf *bytes.Buffer) (string, error) {
+	first, err := readChunk(r, aead, masterNonce, 0)
+	if err != nil {
+		return "", err
+	}
+	if first == nil {
+		return "", ErrCorruptedData
+	}
+	extLen := int(first[0])
+	if len(first) < 1+extLen {
+		return "", ErrCorruptedData
+	}
+	authExt := string(first[1 : 1+extLen])
+	if len(first) > 1+extLen {
+		buf.Write(first[1+extLen:])
+	}
+	*idx = 1
+	return authExt, nil
+}
+
+// decryptChunks reads and decrypts all remaining chunks starting at idx,
+// writing plaintext to buf. Returns the terminator/footer error.
+func decryptChunks(r io.Reader, aead cipher.AEAD, masterNonce []byte, idx uint32, buf *bytes.Buffer) error {
+	for {
+		pt, err := readChunk(r, aead, masterNonce, idx)
+		if err != nil {
+			return err
+		}
+		if pt == nil {
+			break
+		}
+		buf.Write(pt)
+		idx++
+	}
+	return readTerminatorAndFooter(r, idx)
+}
+
 // v2 format encrypt/decrypt (chunked AEAD).
 
 func aesEncryptV2(password []byte, data []byte, ext string) ([]byte, error) {
@@ -274,7 +322,7 @@ func aesEncryptV2(password []byte, data []byte, ext string) ([]byte, error) {
 		return nil, err
 	}
 
-	h := &fileHeader{algo: algoAES, kdf: kdfScrypt, ext: ext}
+	h := &fileHeader{ver: headerVersion, algo: algoAES, kdf: kdfScrypt, ext: ext}
 	header := h.marshal()
 
 	var buf bytes.Buffer
@@ -282,13 +330,32 @@ func aesEncryptV2(password []byte, data []byte, ext string) ([]byte, error) {
 	buf.Write(salt)
 	buf.Write(masterNonce)
 
+	// v3+ embeds the extension in the first chunk's plaintext (authenticated).
+	meta := make([]byte, 1+len(ext))
+	meta[0] = byte(len(ext))
+	copy(meta[1:], ext)
+
 	var idx uint32
 	for i := 0; i < len(data); i += chunkSize {
 		end := i + chunkSize
 		if end > len(data) {
 			end = len(data)
 		}
-		if err := writeChunk(&buf, gcm, masterNonce, idx, data[i:end]); err != nil {
+		chunk := data[i:end]
+		if i == 0 {
+			combined := make([]byte, len(meta)+len(chunk))
+			copy(combined, meta)
+			copy(combined[len(meta):], chunk)
+			chunk = combined
+		}
+		if err := writeChunk(&buf, gcm, masterNonce, idx, chunk); err != nil {
+			return nil, err
+		}
+		idx++
+	}
+	if len(data) == 0 {
+		// Empty file: still write the metadata chunk.
+		if err := writeChunk(&buf, gcm, masterNonce, idx, meta); err != nil {
 			return nil, err
 		}
 		idx++
@@ -300,9 +367,9 @@ func aesEncryptV2(password []byte, data []byte, ext string) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-func aesDecryptV2(password []byte, payload []byte) ([]byte, error) {
+func aesDecryptV2(password []byte, payload []byte, isV3 bool) ([]byte, string, error) {
 	if len(payload) < saltLen+aesNonceSize {
-		return nil, ErrCorruptedData
+		return nil, "", ErrCorruptedData
 	}
 	salt := payload[:saltLen]
 	masterNonce := payload[saltLen : saltLen+aesNonceSize]
@@ -310,36 +377,58 @@ func aesDecryptV2(password []byte, payload []byte) ([]byte, error) {
 
 	dk, err := deriveKeyAES(password, salt)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 
 	blockCipher, err := aes.NewCipher(dk)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	gcm, err := cipher.NewGCM(blockCipher)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 
 	var plaintext bytes.Buffer
 	r := bytes.NewReader(chunkData)
 	var idx uint32
+	var authExt string
+
+	if isV3 {
+		// First chunk is metadata (authenticated extension).
+		first, err := readChunk(r, gcm, masterNonce, 0)
+		if err != nil {
+			return nil, "", err
+		}
+		if first == nil {
+			return nil, "", ErrCorruptedData
+		}
+		extLen := int(first[0])
+		if len(first) < 1+extLen {
+			return nil, "", ErrCorruptedData
+		}
+		authExt = string(first[1 : 1+extLen])
+		if len(first) > 1+extLen {
+			plaintext.Write(first[1+extLen:])
+		}
+		idx = 1
+	}
+
 	for {
 		pt, err := readChunk(r, gcm, masterNonce, idx)
 		if err != nil {
-			return nil, err
+			return nil, "", err
 		}
 		if pt == nil {
-			break // end of stream
+			break
 		}
 		plaintext.Write(pt)
 		idx++
 	}
 	if err := readTerminatorAndFooter(r, idx); err != nil {
-		return nil, err
+		return nil, "", err
 	}
-	return plaintext.Bytes(), nil
+	return plaintext.Bytes(), authExt, nil
 }
 
 func chachaEncryptV2(password []byte, data []byte, ext string) ([]byte, error) {
@@ -360,7 +449,7 @@ func chachaEncryptV2(password []byte, data []byte, ext string) ([]byte, error) {
 		return nil, err
 	}
 
-	h := &fileHeader{algo: algoChaCha, kdf: kdfArgon2id, ext: ext}
+	h := &fileHeader{ver: headerVersion, algo: algoChaCha, kdf: kdfArgon2id, ext: ext}
 	header := h.marshal()
 
 	var buf bytes.Buffer
@@ -368,13 +457,31 @@ func chachaEncryptV2(password []byte, data []byte, ext string) ([]byte, error) {
 	buf.Write(salt)
 	buf.Write(masterNonce)
 
+	// v3+ embeds the extension in the first chunk's plaintext (authenticated).
+	meta := make([]byte, 1+len(ext))
+	meta[0] = byte(len(ext))
+	copy(meta[1:], ext)
+
 	var idx uint32
 	for i := 0; i < len(data); i += chunkSize {
 		end := i + chunkSize
 		if end > len(data) {
 			end = len(data)
 		}
-		if err := writeChunk(&buf, aead, masterNonce, idx, data[i:end]); err != nil {
+		chunk := data[i:end]
+		if i == 0 {
+			combined := make([]byte, len(meta)+len(chunk))
+			copy(combined, meta)
+			copy(combined[len(meta):], chunk)
+			chunk = combined
+		}
+		if err := writeChunk(&buf, aead, masterNonce, idx, chunk); err != nil {
+			return nil, err
+		}
+		idx++
+	}
+	if len(data) == 0 {
+		if err := writeChunk(&buf, aead, masterNonce, idx, meta); err != nil {
 			return nil, err
 		}
 		idx++
@@ -386,9 +493,9 @@ func chachaEncryptV2(password []byte, data []byte, ext string) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-func chachaDecryptV2(password []byte, payload []byte) ([]byte, error) {
+func chachaDecryptV2(password []byte, payload []byte, isV3 bool) ([]byte, string, error) {
 	if len(payload) < saltLen+NonceSize {
-		return nil, ErrCorruptedData
+		return nil, "", ErrCorruptedData
 	}
 	salt := payload[:saltLen]
 	masterNonce := payload[saltLen : saltLen+NonceSize]
@@ -397,16 +504,37 @@ func chachaDecryptV2(password []byte, payload []byte) ([]byte, error) {
 	dk := deriveKeyChaCha(password, salt)
 	aead, err := chacha20poly1305.NewX(dk)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 
 	var plaintext bytes.Buffer
 	r := bytes.NewReader(chunkData)
 	var idx uint32
+	var authExt string
+
+	if isV3 {
+		first, err := readChunk(r, aead, masterNonce, 0)
+		if err != nil {
+			return nil, "", err
+		}
+		if first == nil {
+			return nil, "", ErrCorruptedData
+		}
+		extLen := int(first[0])
+		if len(first) < 1+extLen {
+			return nil, "", ErrCorruptedData
+		}
+		authExt = string(first[1 : 1+extLen])
+		if len(first) > 1+extLen {
+			plaintext.Write(first[1+extLen:])
+		}
+		idx = 1
+	}
+
 	for {
 		pt, err := readChunk(r, aead, masterNonce, idx)
 		if err != nil {
-			return nil, err
+			return nil, "", err
 		}
 		if pt == nil {
 			break
@@ -415,9 +543,9 @@ func chachaDecryptV2(password []byte, payload []byte) ([]byte, error) {
 		idx++
 	}
 	if err := readTerminatorAndFooter(r, idx); err != nil {
-		return nil, err
+		return nil, "", err
 	}
-	return plaintext.Bytes(), nil
+	return plaintext.Bytes(), authExt, nil
 }
 
 // Streaming API.
@@ -459,7 +587,7 @@ func streamEncryptAES(password []byte, in io.Reader, out io.Writer, ext string) 
 		return 0, err
 	}
 
-	h := &fileHeader{algo: algoAES, kdf: kdfScrypt, ext: ext}
+	h := &fileHeader{ver: headerVersion, algo: algoAES, kdf: kdfScrypt, ext: ext}
 	header := h.marshal()
 	if _, err := out.Write(header); err != nil {
 		return 0, err
@@ -471,18 +599,39 @@ func streamEncryptAES(password []byte, in io.Reader, out io.Writer, ext string) 
 		return 0, err
 	}
 
+	// v3+ metadata: prepend extension to the first chunk.
+	meta := make([]byte, 1+len(ext))
+	meta[0] = byte(len(ext))
+	copy(meta[1:], ext)
+
 	var written int64
 	buf := make([]byte, chunkSize)
 	var idx uint32
+	first := true
 	for {
 		n, err := io.ReadFull(in, buf)
 		if err == io.EOF {
+			if first {
+				// Empty file: write metadata-only chunk.
+				if err := writeChunk(out, gcm, masterNonce, idx, meta); err != nil {
+					return written, err
+				}
+				idx++
+			}
 			break
 		}
 		if err != nil && err != io.ErrUnexpectedEOF {
 			return written, err
 		}
-		if err := writeChunk(out, gcm, masterNonce, idx, buf[:n]); err != nil {
+		chunk := buf[:n]
+		if first {
+			combined := make([]byte, len(meta)+len(chunk))
+			copy(combined, meta)
+			copy(combined[len(meta):], chunk)
+			chunk = combined
+			first = false
+		}
+		if err := writeChunk(out, gcm, masterNonce, idx, chunk); err != nil {
 			return written, err
 		}
 		written += int64(n)
@@ -511,7 +660,7 @@ func streamEncryptChaCha(password []byte, in io.Reader, out io.Writer, ext strin
 		return 0, err
 	}
 
-	h := &fileHeader{algo: algoChaCha, kdf: kdfArgon2id, ext: ext}
+	h := &fileHeader{ver: headerVersion, algo: algoChaCha, kdf: kdfArgon2id, ext: ext}
 	header := h.marshal()
 	if _, err := out.Write(header); err != nil {
 		return 0, err
@@ -523,18 +672,38 @@ func streamEncryptChaCha(password []byte, in io.Reader, out io.Writer, ext strin
 		return 0, err
 	}
 
+	// v3+ metadata: prepend extension to the first chunk.
+	meta := make([]byte, 1+len(ext))
+	meta[0] = byte(len(ext))
+	copy(meta[1:], ext)
+
 	var written int64
 	buf := make([]byte, chunkSize)
 	var idx uint32
+	first := true
 	for {
 		n, err := io.ReadFull(in, buf)
 		if err == io.EOF {
+			if first {
+				if err := writeChunk(out, aead, masterNonce, idx, meta); err != nil {
+					return written, err
+				}
+				idx++
+			}
 			break
 		}
 		if err != nil && err != io.ErrUnexpectedEOF {
 			return written, err
 		}
-		if err := writeChunk(out, aead, masterNonce, idx, buf[:n]); err != nil {
+		chunk := buf[:n]
+		if first {
+			combined := make([]byte, len(meta)+len(chunk))
+			copy(combined, meta)
+			copy(combined[len(meta):], chunk)
+			chunk = combined
+			first = false
+		}
+		if err := writeChunk(out, aead, masterNonce, idx, chunk); err != nil {
 			return written, err
 		}
 		written += int64(n)
@@ -549,7 +718,6 @@ func streamEncryptChaCha(password []byte, in io.Reader, out io.Writer, ext strin
 // StreamDecrypt decrypts data from reader to writer, auto-detecting format.
 // Returns the original extension on success.
 func StreamDecrypt(password []byte, in io.Reader, out io.Writer) (string, error) {
-	// Read enough bytes to detect format.
 	var magicBuf [oldMagicLen]byte
 	if _, err := io.ReadFull(in, magicBuf[:magicLen]); err != nil {
 		return "", ErrUnknownFormat
@@ -559,7 +727,6 @@ func StreamDecrypt(password []byte, in io.Reader, out io.Writer) (string, error)
 		return streamDecryptV2(password, in, out)
 	}
 
-	// Check for old magic (1 extra byte needed).
 	if _, err := io.ReadFull(in, magicBuf[magicLen:oldMagicLen]); err != nil {
 		return "", ErrUnknownFormat
 	}
@@ -567,12 +734,10 @@ func StreamDecrypt(password []byte, in io.Reader, out io.Writer) (string, error)
 		return streamDecryptV2(password, in, out)
 	}
 
-	// v1 format not supported via streaming.
 	return "", ErrUnknownFormat
 }
 
 func streamDecryptV2(password []byte, in io.Reader, out io.Writer) (string, error) {
-	// Read the rest of the header (version + algo + kdf + extLen).
 	var hdrTail [4]byte
 	if _, err := io.ReadFull(in, hdrTail[:]); err != nil {
 		return "", ErrCorruptedData
@@ -583,7 +748,7 @@ func streamDecryptV2(password []byte, in io.Reader, out io.Writer) (string, erro
 	kdf := hdrTail[2]
 	extLen := int(hdrTail[3])
 
-	if ver != headerVersion {
+	if ver != headerVersionV1 && ver != headerVersion {
 		return "", fmt.Errorf("unsupported header version: %d", ver)
 	}
 
@@ -593,29 +758,33 @@ func streamDecryptV2(password []byte, in io.Reader, out io.Writer) (string, erro
 	}
 	ext := string(extBytes)
 
-	// Read salt.
 	salt := make([]byte, saltLen)
 	if _, err := io.ReadFull(in, salt); err != nil {
 		return "", ErrCorruptedData
 	}
 
+	isV3 := ver >= 3
+	var authExt string
 	switch algo {
 	case algoAES:
-		if err := streamDecryptAES(password, in, out, salt, kdf); err != nil {
+		if err := streamDecryptAES(password, in, out, salt, kdf, isV3, &authExt); err != nil {
 			return "", err
 		}
 	case algoChaCha:
-		if err := streamDecryptChaCha(password, in, out, salt, kdf); err != nil {
+		if err := streamDecryptChaCha(password, in, out, salt, kdf, isV3, &authExt); err != nil {
 			return "", err
 		}
 	default:
 		return "", ErrUnsupportedAlgo
 	}
 
+	if isV3 {
+		return authExt, nil
+	}
 	return ext, nil
 }
 
-func streamDecryptAES(password []byte, in io.Reader, out io.Writer, salt []byte, kdfType byte) error {
+func streamDecryptAES(password []byte, in io.Reader, out io.Writer, salt []byte, kdfType byte, isV3 bool, authExt *string) error {
 	dk, err := deriveKeyAES(password, salt)
 	if err != nil {
 		return err
@@ -636,6 +805,27 @@ func streamDecryptAES(password []byte, in io.Reader, out io.Writer, salt []byte,
 	}
 
 	var idx uint32
+	if isV3 {
+		first, err := readChunk(in, gcm, masterNonce, 0)
+		if err != nil {
+			return err
+		}
+		if first == nil {
+			return ErrCorruptedData
+		}
+		extLen := int(first[0])
+		if len(first) < 1+extLen {
+			return ErrCorruptedData
+		}
+		*authExt = string(first[1 : 1+extLen])
+		if len(first) > 1+extLen {
+			if _, err := out.Write(first[1+extLen:]); err != nil {
+				return err
+			}
+		}
+		idx = 1
+	}
+
 	for {
 		pt, err := readChunk(in, gcm, masterNonce, idx)
 		if err != nil {
@@ -652,7 +842,7 @@ func streamDecryptAES(password []byte, in io.Reader, out io.Writer, salt []byte,
 	return readTerminatorAndFooter(in, idx)
 }
 
-func streamDecryptChaCha(password []byte, in io.Reader, out io.Writer, salt []byte, kdfType byte) error {
+func streamDecryptChaCha(password []byte, in io.Reader, out io.Writer, salt []byte, kdfType byte, isV3 bool, authExt *string) error {
 	dk := deriveKeyChaCha(password, salt)
 	aead, err := chacha20poly1305.NewX(dk)
 	if err != nil {
@@ -665,6 +855,27 @@ func streamDecryptChaCha(password []byte, in io.Reader, out io.Writer, salt []by
 	}
 
 	var idx uint32
+	if isV3 {
+		first, err := readChunk(in, aead, masterNonce, 0)
+		if err != nil {
+			return err
+		}
+		if first == nil {
+			return ErrCorruptedData
+		}
+		extLen := int(first[0])
+		if len(first) < 1+extLen {
+			return ErrCorruptedData
+		}
+		*authExt = string(first[1 : 1+extLen])
+		if len(first) > 1+extLen {
+			if _, err := out.Write(first[1+extLen:]); err != nil {
+				return err
+			}
+		}
+		idx = 1
+	}
+
 	for {
 		pt, err := readChunk(in, aead, masterNonce, idx)
 		if err != nil {
@@ -795,17 +1006,23 @@ func decryptV2(password, data []byte) ([]byte, string, error) {
 		return nil, "", ErrCorruptedData
 	}
 
+	isV3 := hdr.ver >= 3
+
 	var plaintext []byte
+	var authExt string
 	switch hdr.algo {
 	case algoAES:
-		plaintext, err = aesDecryptV2(password, payload)
+		plaintext, authExt, err = aesDecryptV2(password, payload, isV3)
 	case algoChaCha:
-		plaintext, err = chachaDecryptV2(password, payload)
+		plaintext, authExt, err = chachaDecryptV2(password, payload, isV3)
 	default:
 		return nil, "", ErrUnsupportedAlgo
 	}
 	if err != nil {
 		return nil, "", ErrWrongPassword
+	}
+	if isV3 {
+		return plaintext, authExt, nil
 	}
 	return plaintext, hdr.ext, nil
 }
@@ -860,7 +1077,7 @@ func InspectFileInfo(data []byte) (*FileInfo, error) {
 	payload := data[hdrLen:]
 
 	fi := &FileInfo{
-		FormatVersion: int(headerVersion),
+		FormatVersion: int(hdr.ver),
 		Algorithm:     hdr.algoString(),
 		KDF:           kdfString(hdr.kdf),
 		Extension:     hdr.ext,
@@ -1273,7 +1490,7 @@ func pubKeyEncrypt(recipientPub []byte, data []byte, ext string) ([]byte, error)
 		return nil, err
 	}
 
-	h := &fileHeader{algo: algoPubKey, kdf: kdfECDH, ext: ext}
+	h := &fileHeader{ver: headerVersion, algo: algoPubKey, kdf: kdfECDH, ext: ext}
 	header := h.marshal()
 
 	var buf bytes.Buffer
@@ -1282,13 +1499,30 @@ func pubKeyEncrypt(recipientPub []byte, data []byte, ext string) ([]byte, error)
 	buf.Write(salt)
 	buf.Write(masterNonce)
 
+	meta := make([]byte, 1+len(ext))
+	meta[0] = byte(len(ext))
+	copy(meta[1:], ext)
+
 	var idx uint32
 	for i := 0; i < len(data); i += chunkSize {
 		end := i + chunkSize
 		if end > len(data) {
 			end = len(data)
 		}
-		if err := writeChunk(&buf, gcm, masterNonce, idx, data[i:end]); err != nil {
+		chunk := data[i:end]
+		if i == 0 {
+			combined := make([]byte, len(meta)+len(chunk))
+			copy(combined, meta)
+			copy(combined[len(meta):], chunk)
+			chunk = combined
+		}
+		if err := writeChunk(&buf, gcm, masterNonce, idx, chunk); err != nil {
+			return nil, err
+		}
+		idx++
+	}
+	if len(data) == 0 {
+		if err := writeChunk(&buf, gcm, masterNonce, idx, meta); err != nil {
 			return nil, err
 		}
 		idx++
@@ -1316,6 +1550,7 @@ func pubKeyDecrypt(seed []byte, data []byte) ([]byte, string, error) {
 		return nil, "", ErrUnsupportedAlgo
 	}
 	payload := data[hdrLen:]
+	isV3 := hdr.ver >= 3
 
 	// Single-recipient format (backward compatible).
 	if hdr.algo == algoPubKey {
@@ -1353,19 +1588,18 @@ func pubKeyDecrypt(seed []byte, data []byte) ([]byte, string, error) {
 		var plaintext bytes.Buffer
 		r := bytes.NewReader(chunkData)
 		var idx uint32
-		for {
-			pt, err := readChunk(r, gcm, masterNonce, idx)
+		var authExt string
+		if isV3 {
+			authExt, err = readMetadataChunk(r, gcm, masterNonce, &idx, &plaintext)
 			if err != nil {
-				return nil, "", ErrWrongPassword
+				return nil, "", err
 			}
-			if pt == nil {
-				break
-			}
-			plaintext.Write(pt)
-			idx++
 		}
-		if err := readTerminatorAndFooter(r, idx); err != nil {
-			return nil, "", err
+		if err := decryptChunks(r, gcm, masterNonce, idx, &plaintext); err != nil {
+			return nil, "", ErrWrongPassword
+		}
+		if isV3 {
+			return plaintext.Bytes(), authExt, nil
 		}
 		return plaintext.Bytes(), hdr.ext, nil
 	}
@@ -1445,19 +1679,18 @@ func pubKeyDecrypt(seed []byte, data []byte) ([]byte, string, error) {
 	var plaintext bytes.Buffer
 	r := bytes.NewReader(chunkData)
 	var idx uint32
-	for {
-		pt, err := readChunk(r, dataGCM, dataNonce, idx)
+	var authExt string
+	if isV3 {
+		authExt, err = readMetadataChunk(r, dataGCM, dataNonce, &idx, &plaintext)
 		if err != nil {
-			return nil, "", ErrWrongPassword
+			return nil, "", err
 		}
-		if pt == nil {
-			break
-		}
-		plaintext.Write(pt)
-		idx++
 	}
-	if err := readTerminatorAndFooter(r, idx); err != nil {
-		return nil, "", err
+	if err := decryptChunks(r, dataGCM, dataNonce, idx, &plaintext); err != nil {
+		return nil, "", ErrWrongPassword
+	}
+	if isV3 {
+		return plaintext.Bytes(), authExt, nil
 	}
 	return plaintext.Bytes(), hdr.ext, nil
 }
@@ -1637,7 +1870,7 @@ func pubKeyMultiEncrypt(recipientPubs [][]byte, data []byte, ext string) ([]byte
 		return nil, err
 	}
 
-	h := &fileHeader{algo: algoPubKeyMulti, kdf: kdfECDH, ext: ext}
+	h := &fileHeader{ver: headerVersion, algo: algoPubKeyMulti, kdf: kdfECDH, ext: ext}
 	header := h.marshal()
 
 	var buf bytes.Buffer
@@ -1647,13 +1880,30 @@ func pubKeyMultiEncrypt(recipientPubs [][]byte, data []byte, ext string) ([]byte
 	buf.Write(dataNonce)
 	buf.Write(entriesBuf.Bytes())
 
+	meta := make([]byte, 1+len(ext))
+	meta[0] = byte(len(ext))
+	copy(meta[1:], ext)
+
 	var idx uint32
 	for i := 0; i < len(data); i += chunkSize {
 		end := i + chunkSize
 		if end > len(data) {
 			end = len(data)
 		}
-		if err := writeChunk(&buf, gcm, dataNonce, idx, data[i:end]); err != nil {
+		chunk := data[i:end]
+		if i == 0 {
+			combined := make([]byte, len(meta)+len(chunk))
+			copy(combined, meta)
+			copy(combined[len(meta):], chunk)
+			chunk = combined
+		}
+		if err := writeChunk(&buf, gcm, dataNonce, idx, chunk); err != nil {
+			return nil, err
+		}
+		idx++
+	}
+	if len(data) == 0 {
+		if err := writeChunk(&buf, gcm, dataNonce, idx, meta); err != nil {
 			return nil, err
 		}
 		idx++

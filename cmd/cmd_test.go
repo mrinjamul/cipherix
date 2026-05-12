@@ -1918,8 +1918,8 @@ func TestInspectCommandBasic(t *testing.T) {
 	if !strings.Contains(out, "txt") {
 		t.Fatalf("expected txt extension in inspect output, got:\n%s", out)
 	}
-	if !strings.Contains(out, "Format:  1") {
-		t.Fatalf("expected format version 1 in inspect output, got:\n%s", out)
+	if !strings.Contains(out, "Format:  3") {
+		t.Fatalf("expected format version 3 in inspect output, got:\n%s", out)
 	}
 }
 

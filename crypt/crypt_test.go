@@ -1404,8 +1404,8 @@ func TestInspectFileInfoAES(t *testing.T) {
 	if fi.Extension != ext {
 		t.Errorf("want extension %q, got %q", ext, fi.Extension)
 	}
-	if fi.FormatVersion != 1 {
-		t.Errorf("want FormatVersion 1, got %d", fi.FormatVersion)
+	if fi.FormatVersion != 3 {
+		t.Errorf("want FormatVersion 3, got %d", fi.FormatVersion)
 	}
 	if fi.NumRecipients != 0 {
 		t.Errorf("want NumRecipients 0 for password-based, got %d", fi.NumRecipients)
