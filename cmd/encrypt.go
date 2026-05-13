@@ -131,13 +131,29 @@ func encryptToRecipients(data []byte, extension string) ([]byte, error) {
 			if !os.IsNotExist(err) {
 				return nil, err
 			}
-			// Not in keystore, try as file
-			if fileData, readErr := os.ReadFile(r); readErr == nil {
-				r = strings.TrimSpace(string(fileData))
+			// Not in keystore, try as file path (identity, SSH key, or inline key)
+			var fileData []byte
+			if fd, readErr := os.ReadFile(r); readErr == nil {
+				fileData = fd
+				r = strings.TrimSpace(string(fd))
 			}
 			pubKey, err = crypt.RecipientToPublicKey(r)
 			if err != nil {
 				pubKey, err = crypt.ParseSSHRecipient(r)
+			}
+			if err != nil && len(fileData) > 0 {
+				var id *crypt.Identity
+				id, err = crypt.UnmarshalIdentity(fileData)
+				if err == nil {
+					pubKey, err = crypt.NewX25519Recipient(id.Public)
+				}
+			}
+			if err != nil && len(fileData) > 0 {
+				var priv crypt.PrivateKey
+				priv, err = crypt.ParseSSHIdentity(fileData)
+				if err == nil {
+					pubKey, err = crypt.PrivateKeyToRecipient(priv)
+				}
 			}
 		}
 		if err != nil {

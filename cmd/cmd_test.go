@@ -3139,3 +3139,82 @@ func TestCLIDecryptOldLckFormat(t *testing.T) {
 		t.Fatal("integrity check failed after old-format decrypt")
 	}
 }
+
+// TestEncryptWithIdentityFile verifies that -r accepts a native cipherix
+// identity file path and encrypts to its public key.
+func TestEncryptWithIdentityFile(t *testing.T) {
+	dir := t.TempDir()
+	home := t.TempDir()
+	env := keystoreEnv(home)
+
+	idPath := filepath.Join(dir, "mykey")
+	out, _, err := runWithEnv(env, "keygen", "-o", idPath)
+	if err != nil {
+		t.Fatalf("keygen failed: %v\n%s", err, out)
+	}
+
+	src := filepath.Join(dir, "secret.txt")
+	if err := os.WriteFile(src, []byte("encrypt with identity file"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	origHash := fileHash(t, src)
+
+	// Encrypt using -r with the identity file path.
+	out, _, err = runWithEnv(env, "encrypt", "-k", "-r", idPath, src)
+	if err != nil {
+		t.Fatalf("encrypt with identity file failed: %v\n%s", err, out)
+	}
+
+	lck := lckPath(src)
+	if _, err := os.Stat(lck); os.IsNotExist(err) {
+		t.Fatal("encrypted file not created")
+	}
+
+	// Decrypt with -i identity file (existing path).
+	out, _, err = runWithEnv(env, "decrypt", "-k", "-i", idPath, lck)
+	if err != nil {
+		t.Fatalf("decrypt failed: %v\n%s", err, out)
+	}
+	if fileHash(t, src) != origHash {
+		t.Fatal("integrity check failed")
+	}
+}
+
+// TestEncryptWithSSHIdentityFile verifies that -r accepts an SSH private key
+// file path and encrypts to its public key.
+func TestEncryptWithSSHIdentityFile(t *testing.T) {
+	dir := t.TempDir()
+
+	// Generate Ed25519 SSH key pair.
+	keyPath := filepath.Join(dir, "ed25519")
+	cmd := exec.Command("ssh-keygen", "-t", "ed25519", "-N", "", "-f", keyPath, "-C", "test")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("ssh-keygen failed: %v\n%s", err, out)
+	}
+
+	src := filepath.Join(dir, "secret.txt")
+	if err := os.WriteFile(src, []byte("encrypt with ssh identity"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	origHash := fileHash(t, src)
+
+	// Encrypt using -r with the SSH private key file path.
+	out, _, err := run("encrypt", "-k", "-r", keyPath, src)
+	if err != nil {
+		t.Fatalf("encrypt with SSH identity file failed: %v\n%s", err, out)
+	}
+
+	lck := lckPath(src)
+	if _, err := os.Stat(lck); os.IsNotExist(err) {
+		t.Fatal("encrypted file not created")
+	}
+
+	// Decrypt with -i SSH private key (existing path).
+	out, _, err = run("decrypt", "-k", "-i", keyPath, lck)
+	if err != nil {
+		t.Fatalf("decrypt failed: %v\n%s", err, out)
+	}
+	if fileHash(t, src) != origHash {
+		t.Fatal("integrity check failed")
+	}
+}

@@ -1448,6 +1448,13 @@ func EntryToPrivateKey(e *KeyStoreEntry) (PrivateKey, error) {
 	}
 }
 
+func PrivateKeyToRecipient(priv PrivateKey) (Recipient, error) {
+	return EntryToRecipient(&KeyStoreEntry{
+		Type:   priv.KeyType(),
+		Public: priv.PublicBytes(),
+	})
+}
+
 func IdentityFromRSA(priv *rsa.PrivateKey, label string) (*KeyStoreEntry, error) {
 	privRaw, err := x509.MarshalPKCS8PrivateKey(priv)
 	if err != nil {

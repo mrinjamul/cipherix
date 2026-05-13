@@ -90,10 +90,11 @@ Show the public key only (no file written):
 cipherix keygen -y
 ```
 
-Encrypt to a recipient's public key:
+Encrypt to a recipient's public key or identity file:
 
 ```sh
 cipherix encrypt -r "cphx..." <file>
+cipherix encrypt -r identity_file <file>
 ```
 
 Decrypt with identity file:
@@ -259,7 +260,7 @@ Use `-o <file>` to write encrypted output to a file instead of stdout.
 | `-p, --password` | Encryption/decryption password |
 | `--password-env` | Read password from environment variable |
 | `-m, --method` | Algorithm: `aes`, `chacha20`, `xchacha20` (default: `aes`, auto-detected on decrypt) |
-| `-r, --recipient` | Encrypt to public key(s) (repeatable for multi-recipient) |
+| `-r, --recipient` | Encrypt to public key(s), cipherix identity, or SSH key file (repeatable) |
 | `-i, --identity` | Identity file for decryption |
 | `-o, --output` | Output file path (or extraction directory for directories) |
 | `-k, --keep` | Keep the original file after encrypt/decrypt |
